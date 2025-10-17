@@ -2,4 +2,6 @@ analysis
 figures
 jax_test
 notebook
+test
 .DS_Store
+.idea
