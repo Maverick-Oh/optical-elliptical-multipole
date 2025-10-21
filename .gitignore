@@ -1,3 +1,5 @@
+__obs
+__pycache__
 data
 figures
 jax_test
