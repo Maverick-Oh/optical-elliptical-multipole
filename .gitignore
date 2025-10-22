@@ -8,3 +8,5 @@ test
 .DS_Store
 .idea
 resources
+optical_elliptical_multipole.egg-info
+analysis

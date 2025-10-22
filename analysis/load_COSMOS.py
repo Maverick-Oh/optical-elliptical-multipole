@@ -115,7 +115,7 @@ adql = """SELECT """ + \
 sequentialid, CAPAK_ID, ra, dec, type, ell_gim2d, (1.0 - ELL_GIM2D) AS q, ACS_MU_CLASS, R50, ACS_A_IMAGE as a, 
 ACS_B_IMAGE as b
 FROM cosmos_morph_zurich_1
-WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 DESC
+WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 ASC
 """
 ## type: ZEST Type CLASS, 1 = Early type, 2 = Disk, 3 = Irregular Galaxy, 9 = no classification
 # ACS_MU_CLASS: Type of object. 1 = galaxy, 2 = star, 3 = spurious
@@ -132,9 +132,9 @@ hdul_dir = os.path.join(data_dir, f'HDUL_{datetime_string}')
 os.makedirs(hdul_dir, exist_ok=True)
 
 tab = svc.run_sync(adql).to_table()  # Astropy Table
-tab.write(os.path.join(data_dir, f"cosmos_sample_N={len(tab)}_{datetime_string}.csv"), format="csv", overwrite=True)
+tab.write(os.path.join(hdul_dir, f"cosmos_sample_N={len(tab)}_{datetime_string}.csv"), format="csv", overwrite=True)
 # SAVE ADQL (archiving purpose)
-with open(os.path.join(data_dir, f"ADQL_Query_{datetime_string}.sql"), "w") as file:
+with open(os.path.join(hdul_dir, f"ADQL_Query_{datetime_string}.sql"), "w") as file:
     file.write(adql)
 
 for i in range(len(tab)):
@@ -143,9 +143,13 @@ for i in range(len(tab)):
     if len(hdul) > 1:
         raise ValueError("len(hdul)>1")
     im = hdul[0].data
-    plt.figure()
-    plt.imshow(im, origin="lower")
+    seq_id = int(tab[i]['sequentialid'])
+    # Saving
+    fig, ax = plt.subplots(figsize=(3, 3))
+    ax.imshow(im, origin="lower")
+    ax.set_aspect("equal")
+    fig.savefig(os.path.join(hdul_dir, f"{seq_id}.pdf"))
     plt.show()
-    hdul.writeto(os.path.join(hdul_dir, f"{tab[i]['sequentialid']}.fits"), overwrite=True)
+    hdul.writeto(os.path.join(hdul_dir, f"{seq_id}.fits"), overwrite=True)
 
 print("Done!")

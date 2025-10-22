@@ -68,12 +68,9 @@ def delta_unit_circular_multipole(theta, m, a_m, theta_m):
     a_m = np.array([a_m]).reshape(-1)
     theta_m = np.array([theta_m]).reshape(-1)
     assert len(a_m) == len(m) == len(theta_m)
-    if m.size == 1:
-        delta_r = _delta_unit_single_circular_multipole(theta, m[0], a_m[0], theta_m[0])
-    else:
-        delta_r = np.zeros_like(theta)
-        for i in range(len(m)):
-            delta_r += _delta_unit_single_circular_multipole(theta, m[i], a_m[i], theta_m[i])
+    delta_r = np.zeros_like(theta)
+    for i in range(len(m)):
+        delta_r += _delta_unit_single_circular_multipole(theta, m[i], a_m[i], theta_m[i])
     return delta_r
 
 def delta_circular_multipole(r0, theta, m, a_m, theta_m):
@@ -91,13 +88,10 @@ def remove_multipole(r, phi, m, a_m, phi_m):
     a_m = np.asarray(a_m).reshape(-1)
     phi_m = np.asarray(phi_m).reshape(-1)
     assert len(a_m) == len(m) == len(phi_m)
-    if m.size == 1:
-        r_new = r.copy() / ( 1 + _single_multipole_factor(r, phi, m[0], a_m[0], phi_m[0]) )
-    else:
-        factor = np.zeros_like(r)
-        for i in range(len(m)):
-            factor += _single_multipole_factor(r, phi, m[i], a_m[i], phi_m[i])
-        r_new = r.copy() / (1 + factor)
+    factor = np.zeros_like(r)
+    for i in range(len(m)):
+        factor += _single_multipole_factor(r, phi, m[i], a_m[i], phi_m[i])
+    r_new = r.copy() / (1 + factor)
     return r_new
 
 def remove_circular_multipole_and_circularize(r, theta, q, m, a_m, theta_m):
