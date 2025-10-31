@@ -53,14 +53,19 @@ def fetch_cutout(params):
 COSMOS_MIN = 1 # arcsec
 COSMOS_MAX = 180 # arcsec
 
-def param_generator(tab_row, cutout_factor_r50=3., pixel_width=0.03, verbose=True):
+def param_generator(tab_row, cutout_factor_r50=3., pixel_width=0.03, verbose=False):
     # pixel_width: 0.03 arcsec/px for ACS, according to: https://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterface.html#example
     assert type(tab_row) == astropy.table.row.Row # double check that this is one table item (not the entire table of
     # many targets)
+    # print(tab_row)
     ra  = float(tab_row['ra'])
     dec = float(tab_row['dec'])
-    r50_px = float(tab_row['r50']) # Pixels ZEST semi-major axis length of ellipse encompassing 50% of total light
-    r50_arcsec = r50_px * pixel_width
+    # r50_px = float(tab_row['r50']) # Pixels ZEST semi-major axis length of ellipse encompassing 50% of total light
+    # if type(tab_row['r_gim2d']) == np.ma.core.MaskedConstant:
+    r50_px = float(tab_row['r50'])
+    r50_arcsec = r50_px*0.03
+    # else:
+    #     r50_arcsec = float(tab_row['r_gim2d'])
     cutout_size = cutout_factor_r50 * r50_arcsec
     cutout_size = max(COSMOS_MIN, min(cutout_size, COSMOS_MAX))
     if verbose:
@@ -110,12 +115,13 @@ print("DONE!")
 # R50 is in pixels (ACS scale = 0.03 arcsec/pix per catalog docs)
 # ELL_GIM2D = 1 - (b/a); we also return b/a explicitly.
 adql = """SELECT """ + \
-""" TOP 10""" +\
-"""
-sequentialid, CAPAK_ID, ra, dec, type, ell_gim2d, (1.0 - ELL_GIM2D) AS q, ACS_MU_CLASS, R50, ACS_A_IMAGE as a, 
-ACS_B_IMAGE as b
+""" TOP 10 """ +\
+""" sequentialid, CAPAK_ID, ra, dec, type, 
+ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
+ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
+R_GIM2D, ell_gim2d, PA_GIM2D, SERSIC_N_GIM2D
 FROM cosmos_morph_zurich_1
-WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 ASC
+WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 DESC
 """
 ## type: ZEST Type CLASS, 1 = Early type, 2 = Disk, 3 = Irregular Galaxy, 9 = no classification
 # ACS_MU_CLASS: Type of object. 1 = galaxy, 2 = star, 3 = spurious
@@ -137,19 +143,38 @@ tab.write(os.path.join(hdul_dir, f"cosmos_sample_N={len(tab)}_{datetime_string}.
 with open(os.path.join(hdul_dir, f"ADQL_Query_{datetime_string}.sql"), "w") as file:
     file.write(adql)
 
+import time
+t0 = time.perf_counter()
+
+plot = False
 for i in range(len(tab)):
+    if i==1 or (i>1 and i%5==0):
+        done = i + 1
+        elapsed = time.perf_counter() - t0
+        # items/sec (avoid div by zero)
+        rate = done / elapsed if elapsed > 0 else float('inf')
+        rem = len(tab) - done
+        eta_sec = rem / rate if np.isfinite(rate) and rate > 0 else float('nan')
+        if np.isfinite(eta_sec):
+            m, s = divmod(int(round(eta_sec)), 60)
+            h, m = divmod(m, 60)
+            eta_str = f"{h:02d}:{m:02d}:{s:02d}"
+        else:
+            eta_str = "--:--:--"
+        msg = f"\rProcessing: [{done:>5}/{len(tab):<5}]  ETA: {eta_str}"
+        print(msg, end='', flush=True)
     param = param_generator(tab[i])
     hdul = fetch_cutout(param)
     if len(hdul) > 1:
         raise ValueError("len(hdul)>1")
-    im = hdul[0].data
     seq_id = int(tab[i]['sequentialid'])
     # Saving
-    fig, ax = plt.subplots(figsize=(3, 3))
-    ax.imshow(im, origin="lower")
-    ax.set_aspect("equal")
-    fig.savefig(os.path.join(hdul_dir, f"{seq_id}.pdf"))
+    if plot:
+        im = hdul[0].data
+        fig, ax = plt.subplots(figsize=(3, 3))
+        ax.imshow(im, origin="lower")
+        ax.set_aspect("equal")
+        fig.savefig(os.path.join(hdul_dir, f"{seq_id}.pdf"))
     plt.show()
     hdul.writeto(os.path.join(hdul_dir, f"{seq_id}.fits"), overwrite=True)
-
 print("Done!")
