@@ -19,33 +19,33 @@ def _resolve_phi_m(phi_m, theta_m, q):
     else:
         return np.asarray(theta2phi(theta_m, q), dtype=float)
 
-def _format_output(r, theta, return_type='xy', x0=0., y0=0.):
+def _format_output(r, theta,  x0=0., y0=0., *, return_type='xy'):
     """Return (x,y) for return_type='xy' else (r, theta) after translation."""
     x, y = RTHETA2XY(r, theta)
     x += x0
     y += y0
     if return_type == 'xy':
         return x, y
-    elif return_type == 'theta':
+    elif return_type == 'polar':
         r, theta = XY2RTHETA(x, y)
         return r, theta
     else:
         raise ValueError("return_type must be 'xy' or 'polar'.")
 
-def Circular_Profile_1D(r0=1.0, return_type='xy', x0=0.0, y0=0.0, include_end=True, n_points=100):
+def Circular_Profile_1D(r0, x0=0.0, y0=0.0, *, return_type='xy', include_end=True, n_points=100):
     """
     Parametric circle contour with center translation.
     If r0 is scalar, expand to length n_points.
     """
     theta, r_vec = angle_like_r(r0, include_end=include_end, n_points=n_points)
     # Pure circle: r(theta) = r0
-    x, y = RTHETA2XY(r_vec, theta)
-    return (x + x0, y + y0) if return_type == 'xy' else (r_vec, theta)
+    out = _format_output(r_vec, theta, return_type=return_type, x0=x0, y0=y0)
+    return out
 
 
 def Elliptical_Profile_1D(
-    r0=None, q=None, theta_ell=None,
-    x0=0.0, y0=0.0, return_type='xy', include_end=True, n_points=100
+    r0, q, theta_ell,
+    x0=0.0, y0=0.0, *, return_type='xy', include_end=True, n_points=100
 ):
     """
     1D contour with **elliptical multipole** added in eccentric anomaly (phi),
@@ -72,7 +72,7 @@ def Elliptical_Profile_1D(
     return out
 
 def Elliptical_Multipole_Profile_1D(
-    r0=None, q=None, theta_ell=None, m=None, a_m=None, phi_m=None,
+    r0, q, theta_ell, m, a_m, phi_m,
     x0=0.0, y0=0.0, return_type='xy', include_end=True, n_points=100
 ):
     """
@@ -106,7 +106,7 @@ def Elliptical_Multipole_Profile_1D(
 
 
 def Circular_Multipole_Profile_1D(
-    r0=None, q=None, theta_ell=None, m=None, a_m=None, theta_m=None,
+    r0, q, theta_ell, m, a_m, theta_m,
     x0=0.0, y0=0.0, return_type='xy', include_end=True, n_points=100
 ):
     """
@@ -125,8 +125,5 @@ def Circular_Multipole_Profile_1D(
     r = r_vec * (f_ell + (1.0 / np.sqrt(q)) * delta)
     # Rotate by theta_ell and translate
     theta_rot = theta + theta_ell
-    out = _format_output(r, theta_rot, return_type=return_type)
-    if return_type == 'xy':
-        x, y = out
-        return x + x0, y + y0
+    out = _format_output(r, theta_rot, return_type=return_type, x0=x0, y0=y0)
     return out

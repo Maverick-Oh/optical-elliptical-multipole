@@ -10,7 +10,8 @@ from optical_elliptical_multipole.nonjax.tools import (
     remove_circular_multipole_and_circularize, theta2phi, ellipticize_factor_simple
 )
 
-def Circular_Profile_2D(X, Y, intensity_fun, x0=0.0, y0=0.0, **intensity_fun_kwargs):
+def Circular_Profile_2D(X, Y, intensity_fun,
+                        x0=0.0, y0=0.0, **intensity_fun_kwargs):
     """
     Evaluate intensity_fun at circular radius centered at (x0,y0).
     No ellipticity or multipoles.
@@ -18,7 +19,8 @@ def Circular_Profile_2D(X, Y, intensity_fun, x0=0.0, y0=0.0, **intensity_fun_kwa
     R, _TH = XY2RTHETA(X - x0, Y - y0)
     return intensity_fun(R, **intensity_fun_kwargs)
 
-def Elliptical_Profile_2D(X, Y, intensity_fun, q, theta_ell, x0=0.0, y0=0.0, **intensity_fun_kwargs):
+def Elliptical_Profile_2D(X, Y, intensity_fun, q, theta_ell,
+                          x0=0.0, y0=0.0, **intensity_fun_kwargs):
     """
     Evaluate intensity_fun at circular radius centered at (x0,y0).
     No ellipticity or multipoles.
@@ -29,8 +31,8 @@ def Elliptical_Profile_2D(X, Y, intensity_fun, q, theta_ell, x0=0.0, y0=0.0, **i
     return intensity_fun(R_circ, **intensity_fun_kwargs)
 
 def Elliptical_Multipole_Profile_2D(
-    X, Y, intensity_fun, q, theta_ell, m, a_m, phi_m, x0=0.0, y0=0.0,
-    **intensity_fun_kwargs
+    X, Y, intensity_fun, q, theta_ell, m, a_m, phi_m,
+        x0=0.0, y0=0.0, **intensity_fun_kwargs
 ):
     """
     Evaluate intensity with an **elliptical multipole** removed.
@@ -49,7 +51,8 @@ def Elliptical_Multipole_Profile_2D(
     return intensity_fun(R_core, **intensity_fun_kwargs)
 
 def Circular_Multipole_Profile_2D(
-    X, Y, intensity_fun, q, theta_ell, m, a_m, theta_m, *, x0=0.0, y0=0.0, **intensity_fun_kwargs
+    X, Y, intensity_fun, q, theta_ell, m, a_m, theta_m,
+        x0=0.0, y0=0.0, **intensity_fun_kwargs
 ):
     """
     Evaluate intensity with a **circular multipole** removed along with geometric factor.
