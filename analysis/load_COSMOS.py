@@ -1,122 +1,41 @@
 from datetime import datetime
-import requests, xml.etree.ElementTree as ET
-from astropy.io import fits
-from io import BytesIO
 import os
+from tools_cutout_service import fetch_cutout, param_generator
+from astropy.stats import sigma_clipped_stats, sigma_clip
+# datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
+# datetime_string = datetime_string[:datetime_string.find('.')]
 
-datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
-datetime_string = datetime_string[:datetime_string.find('.')]
-
-def new_session():
-    s = requests.Session()
-    s.trust_env = False                 # ignore HTTP(S)_PROXY, etc.
-    s.headers.update({
-        "User-Agent": "python-requests/cosmos-cutout",
-        "Connection": "close",          # avoid keep-alive reuse issues
-        "Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8",
-    })
-    return s
-
-def fetch_cutout(params):
-    s = new_session()
-    url = "https://irsa.ipac.caltech.edu/cgi-bin/Cutouts/nph-cutouts"
-    r = s.get(url, params=params, timeout=60, allow_redirects=True, verify=True)
-    r.raise_for_status()
-
-    # if a proxy or gateway returned a non-http body, r.raise_for_status() may not run;
-    # add a sanity check on the first chars
-    txt = r.text.lstrip()
-    if not (txt.startswith("<?xml") or txt.startswith("<result")):
-        # Print a snippet to debug what we actually got
-        raise RuntimeError(f"Unexpected response (not XML): {txt[:200]}")
-
-    root = ET.fromstring(txt)
-    status = root.attrib.get("status", "ok")
-    if status != "ok":
-        raise RuntimeError(root.findtext("message", default="IRSA Cutouts error"))
-
-    # collect FITS URLs, stripping whitespace
-    fits_urls = [el.text.strip() for el in root.findall(".//images/cutouts/fits") if el.text and el.text.strip()]
-    if not fits_urls:
-        urls = [u.text.strip() for u in root.findall(".//url") if u.text and u.text.strip()]
-        fits_urls = [u for u in urls if u.lower().endswith((".fits", ".fits.gz"))]
-    if not fits_urls:
-        html_url = root.findtext(".//summary/resultHtml")
-        raise RuntimeError(f"No FITS URLs found. Open to inspect:\n{html_url}")
-
-    # fetch FITS (fresh session to avoid reusing a flaky TCP connection)
-    s2 = new_session()
-    fr = s2.get(fits_urls[0], timeout=120, allow_redirects=True, verify=True)
-    fr.raise_for_status()
-    return fits.open(BytesIO(fr.content))
-
-COSMOS_MIN = 1 # arcsec
-COSMOS_MAX = 180 # arcsec
-
-def param_generator(tab_row, cutout_factor_r50=3., pixel_width=0.03, verbose=False):
-    # pixel_width: 0.03 arcsec/px for ACS, according to: https://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterface.html#example
-    assert type(tab_row) == astropy.table.row.Row # double check that this is one table item (not the entire table of
-    # many targets)
-    # print(tab_row)
-    ra  = float(tab_row['ra'])
-    dec = float(tab_row['dec'])
-    # r50_px = float(tab_row['r50']) # Pixels ZEST semi-major axis length of ellipse encompassing 50% of total light
-    # if type(tab_row['r_gim2d']) == np.ma.core.MaskedConstant:
-    r50_px = float(tab_row['r50'])
-    r50_arcsec = r50_px*0.03
-    # else:
-    #     r50_arcsec = float(tab_row['r_gim2d'])
-    cutout_size = cutout_factor_r50 * r50_arcsec
-    cutout_size = max(COSMOS_MIN, min(cutout_size, COSMOS_MAX))
-    if verbose:
-        print("cutout size:", cutout_size)
-    #
-    params = {
-        "mode": "PI", # Program Interface (PI) mode
-        "mission": "COSMOS", #
-        "locstr": f"{ra} {dec} eq", # This is the search location parameter, required for all searches. The input can be a coordinate or astronomical object name; if it is an object name, it is resolved into coordinates using NED and, if that fails, SIMBAD.
-        "sizeX": f"{cutout_size}",
-        # The image cutouts box size on the sky (units of this size parameter are specified by the next parameter, called "units", which can be deg, arcmin or arcsec). The size can be any number larger than zero (interpreted as a double) and smaller than the size specified by the "max_size" parameter (note units may be different). Note, in most cases, the maximum allowed sizeX value is 2.0 degrees, but it varies for the different data collections. COSMOS program interface allows 1–180 arcsec
-        "units": "arcsec",
-        "min_size": str(int(COSMOS_MIN)), # The minimum allowed cutout size for COSMOS data in arcseconds.
-        "max_size": str(int(COSMOS_MAX)), # The maximum allowed cutout size for COSMOS data in arcseconds.
-        "ntable_cutouts": "1", # The number of metadata tables to search, for cutouts of COSMOS. Names of all N tables are listed below.
-        "cutouttbl1": "acs_mosaic_2.0",
-    }
-    return params
+datetime_string = 'test'
 
 #%%
 # General reference for COSMOS:
 # https://cosmos.astro.caltech.edu/page/astronomers
 import pyvo
-from astropy.table import Table
 import numpy as np
 import matplotlib.pyplot as plt
-import astropy
 
+#%% Code to check all column names
+"""
 svc = pyvo.dal.TAPService("https://irsa.ipac.caltech.edu/TAP")
-
-adql = """SELECT TOP 1 * FROM cosmos_morph_zurich_1"""
-
+adql = "SELECT TOP 1 * FROM cosmos_morph_zurich_1"
 tab = svc.run_sync(adql).to_table()  # Astropy Table
 colnames = tab.colnames
 print("Column names:")
 print(colnames)
 # Check column information here:
 # https://irsa.ipac.caltech.edu/data/COSMOS/gator_docs/cosmos_morph_zurich_colDescriptions.html
-
 # For Cutouts Program and information, Check:
 # https://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterface.html
-
 print("DONE!")
+"""
 
 #%%
 # TYPE=1 are early-type (E/S0) in ZEST; STELLARITY=0 excludes stars
 # R50 is in pixels (ACS scale = 0.03 arcsec/pix per catalog docs)
 # ELL_GIM2D = 1 - (b/a); we also return b/a explicitly.
-adql = """SELECT """ + \
-""" TOP 10 """ +\
-""" sequentialid, CAPAK_ID, ra, dec, type, 
+adql = """SELECT 
+TOP 10 
+sequentialid, CAPAK_ID, ra, dec, type, 
 ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
 ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
 R_GIM2D, ell_gim2d, PA_GIM2D, SERSIC_N_GIM2D
@@ -137,6 +56,7 @@ data_dir = '../data'
 hdul_dir = os.path.join(data_dir, f'HDUL_{datetime_string}')
 os.makedirs(hdul_dir, exist_ok=True)
 
+svc = pyvo.dal.TAPService("https://irsa.ipac.caltech.edu/TAP")
 tab = svc.run_sync(adql).to_table()  # Astropy Table
 tab.write(os.path.join(hdul_dir, f"cosmos_sample_N={len(tab)}_{datetime_string}.csv"), format="csv", overwrite=True)
 # SAVE ADQL (archiving purpose)
@@ -144,37 +64,79 @@ with open(os.path.join(hdul_dir, f"ADQL_Query_{datetime_string}.sql"), "w") as f
     file.write(adql)
 
 import time
-t0 = time.perf_counter()
 
-plot = False
+def elapsed_time_reporter(t0, i, total, seq_id=None):
+    done = i + 1
+    elapsed = time.perf_counter() - t0
+    # items/sec (avoid div by zero)
+    rate = done / elapsed if elapsed > 0 else float('inf')
+    rem = len(tab) - done
+    eta_sec = rem / rate if np.isfinite(rate) and rate > 0 else float('nan')
+    if np.isfinite(eta_sec):
+        m, s = divmod(int(round(eta_sec)), 60)
+        h, m = divmod(m, 60)
+        eta_str = f"{h:02d}:{m:02d}:{s:02d}"
+    else:
+        eta_str = "--:--:--"
+    msg = f"\rProcessing: [{done:>5}/{len(tab):<5}]  ETA: {eta_str}, sequentialid: {seq_id}"
+    print(msg, end='', flush=True)
+    return None
+
+plot = True
+bg_mean = np.zeros(len(tab))
+bg_median = np.zeros(len(tab))
+bg_std = np.zeros(len(tab))
 for i in range(len(tab)):
-    if i==1 or (i>1 and i%5==0):
-        done = i + 1
-        elapsed = time.perf_counter() - t0
-        # items/sec (avoid div by zero)
-        rate = done / elapsed if elapsed > 0 else float('inf')
-        rem = len(tab) - done
-        eta_sec = rem / rate if np.isfinite(rate) and rate > 0 else float('nan')
-        if np.isfinite(eta_sec):
-            m, s = divmod(int(round(eta_sec)), 60)
-            h, m = divmod(m, 60)
-            eta_str = f"{h:02d}:{m:02d}:{s:02d}"
-        else:
-            eta_str = "--:--:--"
-        msg = f"\rProcessing: [{done:>5}/{len(tab):<5}]  ETA: {eta_str}"
-        print(msg, end='', flush=True)
-    param = param_generator(tab[i])
+    seq_id = int(tab[i]['sequentialid'])
+    t0 = time.perf_counter()
+    elapsed_time_reporter(t0, i, total=len(tab), seq_id = seq_id)
+    param = param_generator(tab[i], cutout_arcsec=80.)
     hdul = fetch_cutout(param)
     if len(hdul) > 1:
         raise ValueError("len(hdul)>1")
-    seq_id = int(tab[i]['sequentialid'])
     # Saving
+    mean, median, stdev = sigma_clipped_stats(hdul[0].data, sigma=3.0)
+    bg_mean[i] = mean; bg_median[i] = median; bg_std[i] = stdev
     if plot:
         im = hdul[0].data
-        fig, ax = plt.subplots(figsize=(3, 3))
-        ax.imshow(im, origin="lower")
-        ax.set_aspect("equal")
+        im_clipped = sigma_clip(im, sigma=3.0)
+        #
+        fig, axes = plt.subplots(figsize=(9, 3), nrows=1, ncols=3)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            im_ = axes[0].imshow(np.log10(im), origin="lower", vmin=-6, vmax=np.nanmax(np.log10(im)))
+        plt.colorbar(mappable=im_, ax=axes[0])
+        #
+        axes[1].set_facecolor('k')
+        from matplotlib.colors import ListedColormap
+        cmap_for_negative = ListedColormap(["#000000", "#ff0000"])
+        im__negative = axes[1].imshow((im_clipped<0), origin="lower", cmap=cmap_for_negative)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            im__ = axes[1].imshow(np.log10(im_clipped), origin="lower", vmin=-6, vmax=np.nanmax(np.log10(im)))
+        plt.colorbar(mappable=im__, ax=axes[1])
+        #
+        axes[0].set_aspect("equal"); axes[1].set_aspect("equal")
+        #
+        axes[2].hist(im_clipped.flatten(), bins=100)
+        axes[2].axvline(mean, color='r', label='mean')
+        axes[2].axvline(median, color='b', label='median')
+        #
+        axes[0].set_title("log10(image)\n")
+        axes[1].set_title("log10(clipped image)\n(red: negative)")
+        axes[2].set_title("histogram of clipped image")
+        # x and y labels
+        axes[0].set_xlabel("x (pixels)")
+        axes[1].set_xlabel("x (pixels)")
+        axes[2].set_xlabel("flux")
+        #
+        axes[2].set_yticks([])
+        #
+        plt.legend()
+        plt.tight_layout()
+        #
         fig.savefig(os.path.join(hdul_dir, f"{seq_id}.pdf"))
+        plt.show()
+        #
+        print("")
     plt.show()
     hdul.writeto(os.path.join(hdul_dir, f"{seq_id}.fits"), overwrite=True)
 print("Done!")

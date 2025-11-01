@@ -44,7 +44,7 @@ def _prep_scale(img, scale='log', eps=1e-6):
         disp = img
     return disp
 
-def comparison_plot(im1, im2, *, scale='log', labels=None, extent=None):
+def comparison_plot(im1, im2, *, scale='log', labels=None, extent=None, vminvmax_standard='im1'):
     """
     Three-panel comparison plot: data, model, residual.
     Residual uses bwr with symmetric limits so white == 0.
@@ -61,8 +61,17 @@ def comparison_plot(im1, im2, *, scale='log', labels=None, extent=None):
     im2_disp = _prep_scale(im2, scale=scale)
 
     # Shared color limits for data & model
-    vmin = np.nanmin([np.nanmin(im1_disp), np.nanmin(im2_disp)])
-    vmax = np.nanmax([np.nanmax(im1_disp), np.nanmax(im2_disp)])
+    if vminvmax_standard == 'im1':
+        vmin = np.nanmin(im1_disp)
+        vmax = np.nanmax(im1_disp)
+    elif vminvmax_standard == 'im2':
+        vmin = np.nanmin(im2_disp)
+        vmax = np.nanmax(im2_disp)
+    elif vminvmax_standard == 'both':
+        vmin = np.nanmin([np.nanmin(im1_disp), np.nanmin(im2_disp)])
+        vmax = np.nanmax([np.nanmax(im1_disp), np.nanmax(im2_disp)])
+    else:
+        raise ValueError(f"Invalid vminvmax_standard: {vminvmax_standard}; it should be either 'im1' or 'im2' or 'both'")
 
     # 1) left: data
     h1 = axs[0].imshow(im1_disp, extent=extent, origin='lower', aspect='equal',
