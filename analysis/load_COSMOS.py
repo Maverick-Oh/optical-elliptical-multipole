@@ -2,9 +2,11 @@ from datetime import datetime
 import os
 from tools_cutout_service import fetch_cutout, param_generator
 from astropy.stats import sigma_clipped_stats, sigma_clip
+from optical_elliptical_multipole.plotting.plot_tools import AsinhStretchPlot
+from scipy.stats import moment
+
 # datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
 # datetime_string = datetime_string[:datetime_string.find('.')]
-
 datetime_string = 'test'
 
 #%%
@@ -34,13 +36,13 @@ print("DONE!")
 # R50 is in pixels (ACS scale = 0.03 arcsec/pix per catalog docs)
 # ELL_GIM2D = 1 - (b/a); we also return b/a explicitly.
 adql = """SELECT 
-TOP 10 
+TOP 100
 sequentialid, CAPAK_ID, ra, dec, type, 
 ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
 ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
 R_GIM2D, ell_gim2d, PA_GIM2D, SERSIC_N_GIM2D
 FROM cosmos_morph_zurich_1
-WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 DESC
+WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY sequentialid DESC
 """
 ## type: ZEST Type CLASS, 1 = Early type, 2 = Disk, 3 = Irregular Galaxy, 9 = no classification
 # ACS_MU_CLASS: Type of object. 1 = galaxy, 2 = star, 3 = spurious
@@ -56,6 +58,11 @@ data_dir = '../data'
 hdul_dir = os.path.join(data_dir, f'HDUL_{datetime_string}')
 os.makedirs(hdul_dir, exist_ok=True)
 
+# target_sid = None # ( or [] if there is not specific target to debug )
+target_sid = [129376] #
+verbose = True
+debug = True
+
 svc = pyvo.dal.TAPService("https://irsa.ipac.caltech.edu/TAP")
 tab = svc.run_sync(adql).to_table()  # Astropy Table
 tab.write(os.path.join(hdul_dir, f"cosmos_sample_N={len(tab)}_{datetime_string}.csv"), format="csv", overwrite=True)
@@ -64,23 +71,9 @@ with open(os.path.join(hdul_dir, f"ADQL_Query_{datetime_string}.sql"), "w") as f
     file.write(adql)
 
 import time
+from tool_time_report import elapsed_time_reporter
 
-def elapsed_time_reporter(t0, i, total, seq_id=None):
-    done = i + 1
-    elapsed = time.perf_counter() - t0
-    # items/sec (avoid div by zero)
-    rate = done / elapsed if elapsed > 0 else float('inf')
-    rem = len(tab) - done
-    eta_sec = rem / rate if np.isfinite(rate) and rate > 0 else float('nan')
-    if np.isfinite(eta_sec):
-        m, s = divmod(int(round(eta_sec)), 60)
-        h, m = divmod(m, 60)
-        eta_str = f"{h:02d}:{m:02d}:{s:02d}"
-    else:
-        eta_str = "--:--:--"
-    msg = f"\rProcessing: [{done:>5}/{len(tab):<5}]  ETA: {eta_str}, sequentialid: {seq_id}"
-    print(msg, end='', flush=True)
-    return None
+pixel_width = 0.03 #arcsec/px
 
 plot = True
 bg_mean = np.zeros(len(tab))
@@ -88,44 +81,78 @@ bg_median = np.zeros(len(tab))
 bg_std = np.zeros(len(tab))
 for i in range(len(tab)):
     seq_id = int(tab[i]['sequentialid'])
+    if target_sid is None or target_sid == []:
+        pass
+    else:
+        if seq_id in target_sid:
+            pass
+        else:
+            continue
+    r50_arcsec = tab[i]['r50'] * pixel_width # pixels to arcsec
+    cutout_r50_factor = 20 # make cutout that is this times bigger
+    cutout_arcsec = min(180, r50_arcsec*cutout_r50_factor)
     t0 = time.perf_counter()
     elapsed_time_reporter(t0, i, total=len(tab), seq_id = seq_id)
-    param = param_generator(tab[i], cutout_arcsec=80.)
-    hdul = fetch_cutout(param)
-    if len(hdul) > 1:
-        raise ValueError("len(hdul)>1")
-    # Saving
-    mean, median, stdev = sigma_clipped_stats(hdul[0].data, sigma=3.0)
+    enlarged_count = 0
+    while True:
+        param = param_generator(tab[i], cutout_arcsec=cutout_arcsec)
+        hdul = fetch_cutout(param)
+        if len(hdul) > 1:
+            raise ValueError("len(hdul)>1")
+        # Saving
+        im = hdul[0].data
+        if np.isnan(im).any():
+            if verbose:
+                print(f"{np.sum(np.isnan(im))} pixels are NaN: masking them")
+            im = np.ma.masked_array(im, mask = np.isnan(im))
+        if (im==0.).any():
+            if verbose:
+                print(f"{np.sum(im==0.)} pixels are zeros: masking them")
+            im = np.ma.masked_array(im, mask = im==0.)
+        if debug:
+            fig, ax = plt.subplots(); my_plot = AsinhStretchPlot(ax, im, origin='lower'); plt.colorbar(mappable=my_plot)
+            fig.savefig(os.path.join(data_dir, f"{seq_id}-enlarged-{enlarged_count}.pdf")); plt.show()
+        im_clipped = sigma_clip(im, sigma=3.0)
+        clipped_im_flat = im_clipped.flatten()
+        moment_val = moment(clipped_im_flat[~clipped_im_flat.mask], order=3)
+        if moment_val<1e-8:
+            break # good end
+        elif cutout_arcsec==180:
+            print(f"cutout_arcsec={cutout_arcsec} but moment value still: {moment_val} for seq_id: {seq_id}")
+            break
+        else:
+            enlarged_count += 1
+            cutout_arcsec = min(2*cutout_arcsec, 180)
+    mean, median, stdev = sigma_clipped_stats(im, sigma=3.0)
     bg_mean[i] = mean; bg_median[i] = median; bg_std[i] = stdev
     if plot:
-        im = hdul[0].data
-        im_clipped = sigma_clip(im, sigma=3.0)
         #
+        extent = [-cutout_arcsec/2, cutout_arcsec/2, -cutout_arcsec/2, cutout_arcsec/2]
         fig, axes = plt.subplots(figsize=(9, 3), nrows=1, ncols=3)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            im_ = axes[0].imshow(np.log10(im), origin="lower", vmin=-6, vmax=np.nanmax(np.log10(im)))
+        im_, norm = AsinhStretchPlot(axes[0], im,
+                                     return_norm=True,
+                                     origin="lower",
+                                     extent=extent)
         plt.colorbar(mappable=im_, ax=axes[0])
         #
         axes[1].set_facecolor('k')
-        from matplotlib.colors import ListedColormap
-        cmap_for_negative = ListedColormap(["#000000", "#ff0000"])
-        im__negative = axes[1].imshow((im_clipped<0), origin="lower", cmap=cmap_for_negative)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            im__ = axes[1].imshow(np.log10(im_clipped), origin="lower", vmin=-6, vmax=np.nanmax(np.log10(im)))
+        im__ = AsinhStretchPlot(axes[1], im_clipped,
+                                norm=norm, return_norm=False,
+                                origin="lower", extent=extent)
         plt.colorbar(mappable=im__, ax=axes[1])
         #
         axes[0].set_aspect("equal"); axes[1].set_aspect("equal")
         #
-        axes[2].hist(im_clipped.flatten(), bins=100)
+        axes[2].hist(clipped_im_flat[~clipped_im_flat.mask], bins=100)
         axes[2].axvline(mean, color='r', label='mean')
         axes[2].axvline(median, color='b', label='median')
         #
-        axes[0].set_title("log10(image)\n")
-        axes[1].set_title("log10(clipped image)\n(red: negative)")
-        axes[2].set_title("histogram of clipped image")
+        axes[0].set_title(f"image\n({enlarged_count} times enlarged)")
+        axes[1].set_title("clipped image\n")
+        axes[2].set_title(f"histogram of clipped image\nmoment-3: {moment_val:.1e}")
         # x and y labels
-        axes[0].set_xlabel("x (pixels)")
-        axes[1].set_xlabel("x (pixels)")
+        axes[0].set_xlabel("x (arcsec)")
+        axes[1].set_xlabel("x (arcsec)")
         axes[2].set_xlabel("flux")
         #
         axes[2].set_yticks([])
