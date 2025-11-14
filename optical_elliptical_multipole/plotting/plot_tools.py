@@ -1,5 +1,24 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from astropy.visualization import (ImageNormalize, AsinhStretch, PercentileInterval)
+
+def AsinhStretchPlot(ax, img: np.ma.core.MaskedArray,
+                      title: str|None=None, percentile=99.5, norm=None, return_norm=False, **kwargs):
+    # normalize with percentile stretch
+    interval = PercentileInterval(percentile)
+    v = interval.get_limits(img[np.isfinite(img)]) if np.isfinite(img).any() else (-1, 1)
+    # AsinhStretch makes things brighter: https://docs.astropy.org/en/stable/api/astropy.visualization.AsinhStretch.html
+    if norm is None:
+        norm = ImageNormalize(vmin=v[0], vmax=v[1], stretch=AsinhStretch())
+    # with norm argument, AsinhStretch is accounted correctly in plotting and also colorbar scaling later.
+    im = ax.imshow(img, norm=norm, **kwargs)#, norm=norm)
+    if title is not None:
+        ax.set_title(title)
+    # ax.set_xticks([]); ax.set_yticks([])
+    if return_norm:
+        return im, norm
+    else:
+        return im
 
 def polar_plot(r, theta, fig=None, ax=None, **kwargs):
     if fig is None and ax is None:
