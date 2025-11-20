@@ -2,8 +2,89 @@ import numpy as np
 from matplotlib import pyplot as plt
 from astropy.visualization import (ImageNormalize, AsinhStretch, PercentileInterval)
 
-def AsinhStretchPlot(ax, img: np.ma.core.MaskedArray,
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Ellipse
+from scipy.ndimage import binary_dilation
+
+def _discrete_cmap(n, target_index=1, randomize=False, seed=42):
+    """Build a discrete ListedColormap with n+1 entries (0..n).
+    - Keeps label indices unchanged.
+    - Sets color at target_index to white.
+    - If randomize=True, shuffles colors for indices 1..n excluding target_index.
+    """
+    # choose a base palette
+    # if n <= 20 and base_palette in ('tab20', 'tab20b', 'tab20c'):
+    #     base = plt.get_cmap(base_palette, n + 1)
+    #     colors = base(np.arange(n + 1))
+    # else:
+    base = plt.get_cmap('hsv', n + 1)
+    colors = base(np.arange(n + 1))
+
+    # Optionally randomize all but the target index (and 0 which is unused)
+    # if randomize and n >= 2:
+    #     rng = np.random.default_rng(seed)
+    #     idx = np.arange(1, n + 1)
+    #     # exclude the target index from shuffling
+    #     idx = idx[idx != target_index]
+    #     shuf = idx.copy()
+    #     rng.shuffle(shuf)
+    #     colors[idx] = colors[shuf]
+
+    # Force the target index to white if it is within range
+    # if 1 <= target_index <= n:
+    colors[target_index] = np.array([1.0, 1.0, 1.0, 1.0])
+    cmap = ListedColormap(colors)
+    # plt.figure(); plt.imshow(np.random.randint(n, size=(10,10)), cmap=cmap,); plt.colorbar(); plt.show()
+    return cmap
+
+def draw_segmentation(ax, segmap, title: str, target_label: int, zeros_mask=None,
+                      a50=None, a90=None, a99=None, q=None, theta=None, center_xy=None, seed=42, outline=False,
+                      randomize_cmap=False, **kwargs):
+    # base layer: grayscale of segmap (masked zeros)
+    # base = segmap.astype(float)
+    base = segmap.astype(float)
+    base[segmap == 0] = np.nan
+    if zeros_mask is not None:
+        base[zeros_mask] = np.nan
+
+    nlab = int(np.nanmax(base)) if np.isfinite(base).any() else 1
+
+    # Build discrete cmap; highlight target_label; do not randomize by default
+    tl = int(target_label) if target_label is not None else 1
+    cmap = _discrete_cmap(nlab, target_index=tl, randomize=randomize_cmap, seed=seed)
+    cmap.set_bad('k')  # zeros/NaNs shown in blue
+
+    im = ax.imshow(base, cmap=cmap, vmin=0, vmax=nlab, **kwargs)
+
+    # Optional outline to enhance boundaries
+    if outline and np.isfinite(base).any():
+        mask_nonzero = np.isfinite(base)
+        edges = binary_dilation(mask_nonzero) ^ mask_nonzero
+        ax.imshow(np.where(edges, 1, np.nan), origin='lower', cmap='gray', alpha=0.25)
+
+    # Percent-light ellipses in black for contrast against white target
+    if all(v is not None for v in [a50, q, theta, center_xy]):
+        cx, cy = center_xy
+        for a, lw, lab, color, ls in [(a50, 1.8, 'R50', 'gray', '-'),
+                                  (a90, 1.4, 'R90', 'gray', '--'),
+                                  (a99, 1.0, 'R99', 'gray', ':')]:
+            if a is None or np.isnan(a):
+                continue
+            b = q * a
+            e = Ellipse((cx, cy), 2 * a, 2 * b, angle=np.degrees(theta),
+                        fill=False, linewidth=lw, color=color, ls=ls, label=lab)
+            ax.add_patch(e)
+            # ax.text(cx + 1.2 * a, cy, lab, color=color, fontsize=8, weight='bold')
+    ax.set_title(title)
+    # ax.set_xticks([])
+    # ax.set_yticks([])
+    # ax.legend()
+    return im, cmap
+
+def AsinhStretchPlot(ax, img:np.ma.core.MaskedArray,
                       title: str|None=None, percentile=99.5, norm=None, return_norm=False, **kwargs):
+    if ax is None:
+        fig, ax = plt.subplots()
     # normalize with percentile stretch
     interval = PercentileInterval(percentile)
     v = interval.get_limits(img[np.isfinite(img)]) if np.isfinite(img).any() else (-1, 1)

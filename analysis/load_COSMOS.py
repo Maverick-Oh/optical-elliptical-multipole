@@ -5,16 +5,13 @@ from astropy.stats import sigma_clipped_stats, sigma_clip
 from optical_elliptical_multipole.plotting.plot_tools import AsinhStretchPlot
 from scipy.stats import moment
 
-# datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
-# datetime_string = datetime_string[:datetime_string.find('.')]
-datetime_string = 'test'
-
 #%%
 # General reference for COSMOS:
 # https://cosmos.astro.caltech.edu/page/astronomers
 import pyvo
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.io.fits.hdu.hdulist import HDUList
 
 #%% Code to check all column names
 """
@@ -36,7 +33,7 @@ print("DONE!")
 # R50 is in pixels (ACS scale = 0.03 arcsec/pix per catalog docs)
 # ELL_GIM2D = 1 - (b/a); we also return b/a explicitly.
 adql = """SELECT 
-TOP 100
+TOP 10
 sequentialid, CAPAK_ID, ra, dec, type, 
 ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
 ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
@@ -54,12 +51,16 @@ WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY sequentialid DESC
 # ACS_X_IMAGE	float	pixel	X-pixel position on ACS-tile
 # ACS_Y_IMAGE	float	pixel	Y-pixel position on ACS-tile
 
+datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
+datetime_string = datetime_string[:datetime_string.find('.')]
+# datetime_string = 'test'
+
 data_dir = '../data'
 hdul_dir = os.path.join(data_dir, f'HDUL_{datetime_string}')
 os.makedirs(hdul_dir, exist_ok=True)
 
 # target_sid = None # ( or [] if there is not specific target to debug )
-target_sid = [129376] #
+target_sid = [] #
 verbose = True
 debug = True
 
@@ -95,24 +96,31 @@ for i in range(len(tab)):
     elapsed_time_reporter(t0, i, total=len(tab), seq_id = seq_id)
     enlarged_count = 0
     while True:
-        param = param_generator(tab[i], cutout_arcsec=cutout_arcsec)
+        param = param_generator(tab[i],
+                                cutouttbl1='acs_2.0_cutouts', # 'acs_mosaic_2.0' for mosaic (no WHT) or 'acs_2.0_cutouts' for tiles
+                                cutout_arcsec=cutout_arcsec)
         hdul = fetch_cutout(param)
-        if len(hdul) > 1:
-            raise ValueError("len(hdul)>1")
+        # fig, ax = plt.subplots(); AsinhStretchPlot(ax, hdul['SCI'][0].data, origin='lower'); plt.show()
         # Saving
-        im = hdul[0].data
-        if np.isnan(im).any():
+        if len(hdul) > 1: # SCI and WHT
+            assert len(hdul['SCI']) == 1
+            assert len(hdul['WHT']) == 1
+        sci = hdul['SCI'][0].data
+        wht = hdul['WHT'][0].data
+        print(f"Exposure time: {hdul['SCI'][0].header['EXPTIME']} ({hdul['SCI'][0].header['EXPFLAG']})")
+        print(f"weight mean: {np.mean(wht)}, stdev: {np.std(wht)}")
+        if np.isnan(sci).any():
             if verbose:
-                print(f"{np.sum(np.isnan(im))} pixels are NaN: masking them")
-            im = np.ma.masked_array(im, mask = np.isnan(im))
-        if (im==0.).any():
+                print(f"{np.sum(np.isnan(sci))} pixels are NaN: masking them")
+            sci = np.ma.masked_array(sci, mask = np.isnan(sci))
+        if (sci == 0.).any():
             if verbose:
-                print(f"{np.sum(im==0.)} pixels are zeros: masking them")
-            im = np.ma.masked_array(im, mask = im==0.)
+                print(f"{np.sum(sci == 0.)} pixels are zeros: masking them")
+            sci = np.ma.masked_array(sci, mask =sci == 0.)
         if debug:
-            fig, ax = plt.subplots(); my_plot = AsinhStretchPlot(ax, im, origin='lower'); plt.colorbar(mappable=my_plot)
+            fig, ax = plt.subplots(); my_plot = AsinhStretchPlot(ax, sci, origin='lower'); plt.colorbar(mappable=my_plot)
             fig.savefig(os.path.join(data_dir, f"{seq_id}-enlarged-{enlarged_count}.pdf")); plt.show()
-        im_clipped = sigma_clip(im, sigma=3.0)
+        im_clipped = sigma_clip(sci, sigma=3.0)
         clipped_im_flat = im_clipped.flatten()
         moment_val = moment(clipped_im_flat[~clipped_im_flat.mask], order=3)
         if moment_val<1e-8:
@@ -123,13 +131,20 @@ for i in range(len(tab)):
         else:
             enlarged_count += 1
             cutout_arcsec = min(2*cutout_arcsec, 180)
-    mean, median, stdev = sigma_clipped_stats(im, sigma=3.0)
+
+    if type(hdul) is dict:
+        for key in hdul.keys():
+            hdul[key].writeto(os.path.join(hdul_dir, f"{seq_id}-{key}.fits"), overwrite=True)
+    elif type(hdul) is HDUList:
+        hdul.writeto(os.path.join(hdul_dir, f"{seq_id}.fits"), overwrite=True)
+
+    mean, median, stdev = sigma_clipped_stats(sci, sigma=3.0)
     bg_mean[i] = mean; bg_median[i] = median; bg_std[i] = stdev
     if plot:
         #
         extent = [-cutout_arcsec/2, cutout_arcsec/2, -cutout_arcsec/2, cutout_arcsec/2]
         fig, axes = plt.subplots(figsize=(9, 3), nrows=1, ncols=3)
-        im_, norm = AsinhStretchPlot(axes[0], im,
+        im_, norm = AsinhStretchPlot(axes[0], sci,
                                      return_norm=True,
                                      origin="lower",
                                      extent=extent)
@@ -160,10 +175,9 @@ for i in range(len(tab)):
         plt.legend()
         plt.tight_layout()
         #
-        fig.savefig(os.path.join(hdul_dir, f"{seq_id}.pdf"))
+        fig.savefig(os.path.join(hdul_dir, f"{seq_id}-00-clip.pdf"))
         plt.show()
         #
         print("")
     plt.show()
-    hdul.writeto(os.path.join(hdul_dir, f"{seq_id}.fits"), overwrite=True)
 print("Done!")
