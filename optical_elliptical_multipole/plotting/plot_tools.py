@@ -37,7 +37,7 @@ def _discrete_cmap(n, target_index=1, randomize=False, seed=42):
     # plt.figure(); plt.imshow(np.random.randint(n, size=(10,10)), cmap=cmap,); plt.colorbar(); plt.show()
     return cmap
 
-def draw_segmentation(ax, segmap, title: str, target_label: int, zeros_mask=None,
+def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zeros_mask=None,
                       a50=None, a90=None, a99=None, q=None, theta=None, center_xy=None, seed=42, outline=False,
                       randomize_cmap=False, **kwargs):
     # base layer: grayscale of segmap (masked zeros)
@@ -75,7 +75,8 @@ def draw_segmentation(ax, segmap, title: str, target_label: int, zeros_mask=None
                         fill=False, linewidth=lw, color=color, ls=ls, label=lab)
             ax.add_patch(e)
             # ax.text(cx + 1.2 * a, cy, lab, color=color, fontsize=8, weight='bold')
-    ax.set_title(title)
+    if title is not None:
+        ax.set_title(title)
     # ax.set_xticks([])
     # ax.set_yticks([])
     # ax.legend()
