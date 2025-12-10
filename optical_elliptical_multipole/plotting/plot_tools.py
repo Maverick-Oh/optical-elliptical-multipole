@@ -83,7 +83,7 @@ def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zer
     return im, cmap
 
 def AsinhStretchPlot(ax, img:np.ma.core.MaskedArray,
-                      title: str|None=None, percentile=99.5, norm=None, return_norm=False, **kwargs):
+                      title: str|None=None, percentile=99.5, norm=None, return_norm=False, a=0.1, **kwargs):
     if ax is None:
         fig, ax = plt.subplots()
     # normalize with percentile stretch
@@ -91,7 +91,7 @@ def AsinhStretchPlot(ax, img:np.ma.core.MaskedArray,
     v = interval.get_limits(img[np.isfinite(img)]) if np.isfinite(img).any() else (-1, 1)
     # AsinhStretch makes things brighter: https://docs.astropy.org/en/stable/api/astropy.visualization.AsinhStretch.html
     if norm is None:
-        norm = ImageNormalize(vmin=v[0], vmax=v[1], stretch=AsinhStretch())
+        norm = ImageNormalize(vmin=v[0], vmax=v[1], stretch=AsinhStretch(a=a))
     # with norm argument, AsinhStretch is accounted correctly in plotting and also colorbar scaling later.
     im = ax.imshow(img, norm=norm, **kwargs)#, norm=norm)
     if title is not None:
@@ -137,7 +137,7 @@ def polar_plot_contourf(R, Theta, Z, fig=None, ax=None, title=''):
 import numpy as np
 import matplotlib.pyplot as plt
 
-def _prep_scale(img, scale='log', eps=1e-6):
+def _prep_log_scale(img, scale='log', eps=1e-6):
     if scale == 'log':
         # mask non-positive for display; add eps to avoid -inf
         disp = np.log10(np.maximum(img, 0.0) + eps)
@@ -145,21 +145,35 @@ def _prep_scale(img, scale='log', eps=1e-6):
         disp = img
     return disp
 
-def comparison_plot(im1, im2, *, scale='log', labels=None, extent=None, vminvmax_standard='im1'):
+def comparison_plot(im1, im2, residual_map=None, *,
+                    scale='asinh', labels=None, extent=None, vminvmax_standard='im1',
+                    residual_vmin=None, residual_vmax=None, extra_text=None, extra_text_fontsize=10., a=0.1):
     """
     Three-panel comparison plot: data, model, residual.
     Residual uses bwr with symmetric limits so white == 0.
     Axes are equal by default. Data & model share the same color scale.
-    """
-    fig, axs = plt.subplots(1, 3, figsize=(12, 3))
 
+    scale None, 'log', 'asinh'
+    """
+    if residual_map is None:
+        residual_map = im1 - im2 # default residual: difference
+        lim = np.nanmax(np.abs(residual_map))
+    else:
+        lim = np.nanmax(np.abs(residual_map))
+    ncols = 3 if extra_text is None else 4
+    fig, axs = plt.subplots(1, ncols, figsize=(4*ncols, 3))
+    if (extra_text is not None) and (extra_text != ''):
+        axs[-1].text(0.,1.0, extra_text, horizontalalignment='left', verticalalignment='top', fontsize=extra_text_fontsize)
+        axs[-1].set_xticks([])
+        axs[-1].set_yticks([])
     im1_label = labels[0] if labels is not None else 'image1'
     im2_label = labels[1] if labels is not None else 'image2'
+    res_label = labels[2] if (labels is not None and len(labels)>2) else 'image1 - image2'
     im1_lab_d = f'log({im1_label})' if scale == 'log' else im1_label
     im2_lab_d = f'log({im2_label})' if scale == 'log' else im2_label
 
-    im1_disp = _prep_scale(im1, scale=scale)
-    im2_disp = _prep_scale(im2, scale=scale)
+    im1_disp = _prep_log_scale(im1, scale=scale)
+    im2_disp = _prep_log_scale(im2, scale=scale)
 
     # Shared color limits for data & model
     if vminvmax_standard == 'im1':
@@ -175,26 +189,32 @@ def comparison_plot(im1, im2, *, scale='log', labels=None, extent=None, vminvmax
         raise ValueError(f"Invalid vminvmax_standard: {vminvmax_standard}; it should be either 'im1' or 'im2' or 'both'")
 
     # 1) left: data
-    h1 = axs[0].imshow(im1_disp, extent=extent, origin='lower', aspect='equal',
+    if scale == 'asinh':
+        if vminvmax_standard == 'im1':
+            h1, norm = AsinhStretchPlot(axs[0], im1_disp, a=a, extent=extent, origin='lower', aspect='equal',
+                                        return_norm=True)
+            h2 = AsinhStretchPlot(axs[1], im2_disp, a=a, extent=extent, origin='lower', aspect='equal', norm=norm)
+        elif vminvmax_standard == 'im2':
+            h2, norm = AsinhStretchPlot(axs[1], im2_disp, a=a, extent=extent, origin='lower', aspect='equal', return_norm=True)
+            h1 = AsinhStretchPlot(axs[0], im1_disp, a=a, extent=extent, origin='lower', aspect='equal', norm=norm)
+    else:
+        h1 = axs[0].imshow(im1_disp, extent=extent, origin='lower', aspect='equal',
                        vmin=vmin, vmax=vmax)
+        h2 = axs[1].imshow(im2_disp, extent=extent, origin='lower', aspect='equal',
+                       vmin=vmin, vmax=vmax)
+    h3= axs[2].imshow(residual_map, extent=extent, origin='lower',
+                      cmap='bwr', aspect='equal',
+                      vmin=-lim if residual_vmin is None else residual_vmin,
+                      vmax=+lim if residual_vmax is None else residual_vmax)
+    # color bars and titles
     fig.colorbar(h1, ax=axs[0], location='right')
     axs[0].set_title(im1_lab_d)
-
-    # 2) middle: model
-    h2 = axs[1].imshow(im2_disp, extent=extent, origin='lower', aspect='equal',
-                       vmin=vmin, vmax=vmax)
     fig.colorbar(h2, ax=axs[1], location='right')
     axs[1].set_title(im2_lab_d)
-
-    # 3) right: residual = data - model
-    diff = im1 - im2
-    lim = np.nanmax(np.abs(diff))
-    h3 = axs[2].imshow(
-        diff, extent=extent, origin='lower',
-        cmap='bwr', vmin=-lim, vmax=+lim, aspect='equal'
-    )
     fig.colorbar(h3, ax=axs[2], location='right')
-    axs[2].set_title(f"Difference ({im1_label} - {im2_label})")
+    axs[2].set_title(res_label)
+    for ax in axs[0:3]:
+        ax.set_facecolor('k')
 
     plt.tight_layout()
     return fig, axs

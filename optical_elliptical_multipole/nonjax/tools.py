@@ -147,7 +147,10 @@ def circularize(r, theta, q):
     if callable(q):
         raise NotImplementedError("Callable q is not implemented yet.")
     phi = _theta2phi_core(theta_arr, float(q))
-    return r / _ellipticize_factor_simple_core(float(q), theta_arr), phi
+    if (_ellipticize_factor_simple_core(float(q), theta_arr)==0.).any():
+        raise ValueError("Ellipticize factor cannot be computed.")
+    my_return = r / _ellipticize_factor_simple_core(float(q), theta_arr), phi
+    return my_return
 
 def remove_multipole(r, phi, m, a_m, phi_m):
     """Remove elliptical multipole(s) from r expressed in phi."""
