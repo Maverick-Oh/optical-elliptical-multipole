@@ -10,14 +10,16 @@ heavy-lifting happens in tools/profiles layers.
 """
 import numpy as np
 
-def exp_intensity(R):
+def exp_intensity(R, R0=1.0):
     """
-    Simple exponential intensity profile: I(R) = exp(-R).
+    Simple exponential intensity profile: I(R) = exp(-R/R0) for testing purposes.
 
     Parameters
     ----------
     R : array_like
         Radius (>= 0).
+    R0 : float
+        Scale radius R0 (> 0).
 
     Returns
     -------
@@ -25,7 +27,7 @@ def exp_intensity(R):
         Intensity values with the same shape as R.
     """
     R = np.asarray(R, dtype=float)
-    return np.exp(-R)
+    return np.exp(-R/R0)
 
 def _b(n):
     """

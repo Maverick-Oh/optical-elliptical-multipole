@@ -1,3 +1,7 @@
+.vscode/
+*.csv
+*.xlsx
+*.md
 paper_writing
 environment.yml
 __obs
@@ -11,4 +15,6 @@ test
 .idea
 resources
 optical_elliptical_multipole.egg-info
-analysis
+*.pdf
+obs
+test_source_extractor

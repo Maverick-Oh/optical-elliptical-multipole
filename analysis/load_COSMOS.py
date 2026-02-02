@@ -41,19 +41,19 @@ print("DONE!")
 
 show_plot = False
 adql = """SELECT 
-TOP 1000
-sequentialid, CAPAK_ID, ra, dec, type, 
+TOP 200
+sequentialid, CAPAK_ID, acs_ident, ra, dec, type, 
 ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
 ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
 R_GIM2D, ell_gim2d, PA_GIM2D, SERSIC_N_GIM2D
 FROM cosmos_morph_zurich_1
-WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY sequentialid ASC
+WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 DESC
 """
-# select TOP 10
-# select all
+# column names and descriptions can be found in: https://irsa.ipac.caltech.edu/cgi-bin/Gator/nph-dd
+
 # ORDER BY r50 DESC
 # ORDER BY sequentialid ASC
-## type: ZEST Type CLASS, 1 = Early type, 2 = Disk, 3 = Irregular Galaxy, 9 = no classification
+# type ZEST Type CLASS, 1 = Early type, 2 = Disk, 3 = Irregular Galaxy, 9 = no classification
 # ACS_MU_CLASS: Type of object. 1 = galaxy, 2 = star, 3 = spurious
 # STELLARITY: 0 if ACS_CLASS_STAR<0.6 (object is ASSUMED to be a galaxy; no visual inspection); 0 if ACS_CLASS_STAR>=0.6 AND object visually identified as a galaxy.
 # ELL_GIM2D: GIM2D ellipticity = 1-b/a of object
@@ -65,7 +65,7 @@ WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY sequentialid ASC
 
 # datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
 # datetime_string = datetime_string[:datetime_string.find('.')]
-datetime_string = 'test4-1000'
+datetime_string = 'test7-big100'
 ignore_FITSFixedWarning = True
 
 data_dir = '../data'
@@ -235,12 +235,7 @@ for i in range(len(tab)):
             sci_data = np.ma.masked_array(sci.data, mask = sci.data == 0.)
         else:
             sci_data = sci.data
-        # if debug:
-        #     fig, ax = plt.subplots(); my_plot = AsinhStretchPlot(ax, sci_data, origin='lower')
-        #     plt.colorbar(mappable=my_plot); ax.set_aspect('equal'); ax.set_title(f"{seq_id}-enlarged-{enlarged_count}")
-        #     fig.savefig(os.path.join(hdul_dir, f"{seq_id}-enlarged-{enlarged_count}.pdf"))
-        #     plt.show()
-        #     print("")
+
         im_clipped = sigma_clip(sci_data, sigma=3.0)
         clipped_im_flat = im_clipped.flatten()
         moment_val = moment(clipped_im_flat[~clipped_im_flat.mask], order=3)

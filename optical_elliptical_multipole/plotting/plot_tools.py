@@ -218,3 +218,96 @@ def comparison_plot(im1, im2, residual_map=None, *,
 
     plt.tight_layout()
     return fig, axs
+
+def detailed_comparison_plot(im1, im2, residual_map, *,
+                             extent=None,
+                             param_best=None, param_unc=None, param_true=None,
+                             meta_info_str=None,
+                             residual_vmin=None, residual_vmax=None,
+                             scale='asinh', a=0.1):
+    """
+    Requested 2x3 layout:
+    Row 1: Observed, Model, Residual
+    Row 2: Best Fit params (w/ uncertainties), True params, Meta info
+    """
+    nrows, ncols = 2, 3
+    fig, axs = plt.subplots(nrows, ncols, figsize=(4*ncols, 3.5*nrows))
+    
+    # --- ROW 1: Images ---
+    # Call internal helper or duplicate logic?
+    # Let's duplicate/adapt from comparison_plot for direct control
+    
+    im1_disp = _prep_log_scale(im1, scale=scale)
+    im2_disp = _prep_log_scale(im2, scale=scale)
+    
+    # Shared vmin/vmax
+    vmin = np.nanmin([np.nanmin(im1_disp), np.nanmin(im2_disp)])
+    vmax = np.nanmax([np.nanmax(im1_disp), np.nanmax(im2_disp)])
+    
+    if scale == 'asinh':
+        h1, norm = AsinhStretchPlot(axs[0,0], im1_disp, a=a, extent=extent, origin='lower', aspect='equal', return_norm=True)
+        h2 = AsinhStretchPlot(axs[0,1], im2_disp, a=a, extent=extent, origin='lower', aspect='equal', norm=norm)
+    else:
+        h1 = axs[0,0].imshow(im1_disp, extent=extent, origin='lower', aspect='equal', vmin=vmin, vmax=vmax)
+        h2 = axs[0,1].imshow(im2_disp, extent=extent, origin='lower', aspect='equal', vmin=vmin, vmax=vmax)
+        
+    lim = np.nanmax(np.abs(residual_map))
+    h3 = axs[0,2].imshow(residual_map, extent=extent, origin='lower', cmap='bwr', aspect='equal',
+                         vmin=-lim if residual_vmin is None else residual_vmin,
+                         vmax=+lim if residual_vmax is None else residual_vmax)
+                         
+    fig.colorbar(h1, ax=axs[0,0], location='right', fraction=0.046, pad=0.04)
+    axs[0,0].set_title('Observed')
+    fig.colorbar(h2, ax=axs[0,1], location='right', fraction=0.046, pad=0.04)
+    axs[0,1].set_title('Model')
+    fig.colorbar(h3, ax=axs[0,2], location='right', fraction=0.046, pad=0.04)
+    axs[0,2].set_title('Residual')
+    
+    # --- ROW 2: Info ---
+    
+    # Helper to formatting params
+    # param_best, param_unc, param_true are expected to be Dicts or compatible
+    
+    def format_params(p_dict, u_dict=None):
+        lines = []
+        if p_dict is None: return ""
+        for k, v in p_dict.items():
+            if isinstance(v, (float, np.floating)):
+                val_str = f"{v:.4g}"
+            else:
+                val_str = str(v)
+            
+            if u_dict and k in u_dict:
+                 u = u_dict[k]
+                 if isinstance(u, (float, np.floating)):
+                     lines.append(f"{k}: {val_str} ± {u:.4g}")
+                 else:
+                     lines.append(f"{k}: {val_str} ± {u}")
+            else:
+                 lines.append(f"{k}: {val_str}")
+        return "\n".join(lines)
+
+    # Ax[1,0]: Best Fit + Uncertainty
+    text_best = "Best Fit Parameters:\n------------------\n" + format_params(param_best, param_unc)
+    axs[1,0].text(0.05, 0.95, text_best, transform=axs[1,0].transAxes, 
+                  verticalalignment='top', fontsize=9, family='monospace')
+    axs[1,0].axis('off')
+    # axs[1,0].set_title("Best Fit")
+
+    # Ax[1,1]: True Parameters
+    text_true = "True Parameters:\n----------------\n" + format_params(param_true)
+    axs[1,1].text(0.05, 0.95, text_true, transform=axs[1,1].transAxes, 
+                  verticalalignment='top', fontsize=9, family='monospace')
+    axs[1,1].axis('off')
+    # axs[1,1].set_title("Ground Truth")
+
+    # Ax[1,2]: Meta Info
+    text_meta = "Run Info:\n---------\n"
+    if meta_info_str:
+        text_meta += meta_info_str
+    axs[1,2].text(0.05, 0.95, text_meta, transform=axs[1,2].transAxes, 
+                  verticalalignment='top', fontsize=9, family='monospace')
+    axs[1,2].axis('off')
+
+    plt.tight_layout()
+    return fig, axs
