@@ -16,7 +16,7 @@ except Exception:  # Numba not available; define a no-op decorator
         return wrap
 
 # -------------------- Multipole kernels (vectorized sums) --------------------
-@njit(cache=True)
+@njit(cache=False)
 def _cos_arg(m, ang, phi_m):
     k = m.size
     n = ang.size
@@ -70,7 +70,7 @@ def add_multipole(r, phi, m, a_m, phi_m):
     return r * (1.0 + factor)
 
 # -------------------- Ellipse geometry (core + Python wrappers) --------------------
-@njit(cache=True)
+@njit(cache=False)
 def _ellipticize_factor_simple_core(q, theta):
     return 1.0 / np.sqrt(q * np.cos(theta)**2 + (np.sin(theta)**2) / q)
 
@@ -86,7 +86,7 @@ def ellipticize_factor_simple(q, theta):
     theta_arr = np.asarray(theta, dtype=float)
     return _ellipticize_factor_simple_core(float(q), theta_arr)
 
-@njit(cache=True)
+@njit(cache=False)
 def _phi2theta_core(phi, q):
     return np.arctan2(q * np.sin(phi), np.cos(phi))
 
@@ -101,7 +101,7 @@ def phi2theta(phi, q):
     q_arr = np.asarray(q, dtype=float)
     return _phi2theta_core(phi_arr, q_arr)
 
-@njit(cache=True)
+@njit(cache=False)
 def _theta2phi_core(theta, q):
     return np.arctan2(np.sin(theta) / q, np.cos(theta))
 

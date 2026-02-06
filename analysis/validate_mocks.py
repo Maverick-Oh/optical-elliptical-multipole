@@ -149,52 +149,38 @@ def validate_results(data_dir):
         plt.close()
         
         # --- Multipole Reliability ---
-        # Check multipole errors vs Signal (Amplitude) and Size (R_sersic)
-        # We assume R_sersic and amplitude are available (either as varied or fixed truth)
+        # Plot multipole uncertainties vs the varied parameter
         
         # Identify Multipole Params available
         mps = ['a_m3', 'phi_m3', 'a_m4', 'phi_m4']
         available_mps = [m for m in mps if f"{m}_rec" in merged.columns or f"{m}" in merged.columns] 
-        # Note: if fit results have a_m3 (renamed from a_m3_best), and truth has a_m3, we get a_m3_rec and a_m3_true.
         
-        if available_mps:
-            # We want to plot Uncertainty of these MPs vs R_sersic_true (or amplitude_true)
+        if available_mps and col_true in merged.columns:
+            # Use the VARIED parameter as x-axis (not always R_sersic!)
             fig2, axes2 = plt.subplots(1, 2, figsize=(12, 5))
             
-            # X-axis: R_sersic_true
-            if 'R_sersic_true' in merged.columns:
-                x_sz = merged['R_sersic_true']
-                xlab = 'True R_sersic'
-            elif 'R_sersic' in merged.columns: # Fixed value?
-                x_sz = merged['R_sersic']
-                xlab = 'R_sersic'
-            else:
-                x_sz = None
+            x_varied = merged[col_true]
+            xlab = f'True {param_name}'
                 
-            if x_sz is not None:
-                # Plot 1: Sigma(a_m) vs Size
-                ax = axes2[0]
-                for mp in available_mps:
-                    # Find error col
-                    # mp is like 'a_m3'. Error col: 'a_m3_err'
-                    err_c = f"{mp}_err" # Assuming standard naming
-                    # Check in columns
-                     # Error columns won't have suffixes usually
-                    if err_c in merged.columns:
-                        ax.loglog(x_sz, merged[err_c], 'o', label=mp, alpha=0.5)
-                
+            # Plot 1: Sigma(multipoles) vs Varied Parameter
+            ax = axes2[0]
+            for mp in available_mps:
+                err_c = f"{mp}_err"
+                if err_c in merged.columns:
+                    ax.loglog(x_varied, merged[err_c], 'o', label=mp, alpha=0.5)
+            
+            ax.set_xlabel(xlab)
+            ax.set_ylabel("Uncertainty (1 sigma)")
+            ax.set_title(f"Multipole Uncertainty vs {param_name}")
+            ax.legend()
+            
+            # Plot 2: Chi2 vs Varied Parameter
+            ax = axes2[1]
+            if chi2_col:
+                ax.semilogx(x_varied, merged[chi2_col], 'o', color='r', alpha=0.5)
                 ax.set_xlabel(xlab)
-                ax.set_ylabel("Uncertainty (1 sigma)")
-                ax.set_title("Multipole Uncertainty vs Size")
-                ax.legend()
-                
-                # Plot 2: Chi2 vs Size
-                ax = axes2[1]
-                if chi2_col:
-                    ax.semilogx(x_sz, merged[chi2_col], 'o', color='r', alpha=0.5)
-                    ax.set_xlabel(xlab)
-                    ax.set_ylabel("Chi2 / Loss")
-                    ax.set_title("Fit Quality vs Size")
+                ax.set_ylabel("Chi2 / Loss")
+                ax.set_title(f"Fit Quality vs {param_name}")
                     
             plt.tight_layout()
             plt.savefig(os.path.join(PLOT_DIR, f"multipoles_reliability_{param_name}.pdf"))

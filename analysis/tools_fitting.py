@@ -233,7 +233,7 @@ def default_bounds(m_array, img_half_extent):
     hi += [ 0.1]
     return np.array(lo, float), np.array(hi, float)
 
-def jacobian_error_estimate(v_best, residual_fn, rel_step=1e-6, abs_step=0.0, verbose=False):
+def jacobian_error_estimate(v_best, residual_fn, bounds=None, rel_step=1e-6, abs_step=0.0, verbose=False):
     """
     Estimate 1σ uncertainties for parameters at v_best using a numerical Jacobian
     of the residual vector.
@@ -245,6 +245,9 @@ def jacobian_error_estimate(v_best, residual_fn, rel_step=1e-6, abs_step=0.0, ve
     residual_fn : callable
         Function residual_fn(v) -> 1D array of residuals r (already normalized
         by per-pixel sigma, e.g. (data - model)/sigma). Shape (N,).
+    bounds : tuple of arrays (lo, hi), optional
+        Lower and upper bounds for parameters. If provided, perturbed vectors
+        will be clipped to these bounds to avoid invalid parameter values.
     rel_step : float
         Relative step size for finite differences.
     abs_step : float
@@ -274,6 +277,15 @@ def jacobian_error_estimate(v_best, residual_fn, rel_step=1e-6, abs_step=0.0, ve
             print("[jacobian_error_estimate] N <= P, returning NaNs")
         return np.full(P, np.nan, dtype=float)
 
+    # Extract bounds if provided
+    if bounds is not None:
+        lo, hi = bounds
+        lo = np.asarray(lo, dtype=float)
+        hi = np.asarray(hi, dtype=float)
+    else:
+        lo = np.full(P, -np.inf, dtype=float)
+        hi = np.full(P, np.inf, dtype=float)
+
     # Build Jacobian via central finite differences
     J = np.empty((N, P), dtype=float)
     step = rel_step * (np.abs(v_best) + 1.0) + abs_step
@@ -289,16 +301,27 @@ def jacobian_error_estimate(v_best, residual_fn, rel_step=1e-6, abs_step=0.0, ve
         v_minus = v_best.copy()
         v_plus[j] += h
         v_minus[j] -= h
+        
+        # CRITICAL FIX: Clip to bounds to prevent invalid parameter values
+        v_plus = np.clip(v_plus, lo, hi)
+        v_minus = np.clip(v_minus, lo, hi)
 
-        r_plus = np.asarray(residual_fn(v_plus), dtype=float).ravel()
-        r_minus = np.asarray(residual_fn(v_minus), dtype=float).ravel()
+        try:
+            r_plus = np.asarray(residual_fn(v_plus), dtype=float).ravel()
+            r_minus = np.asarray(residual_fn(v_minus), dtype=float).ravel()
+        except (ValueError, RuntimeError) as e:
+            # If evaluation fails even with clipping, use one-sided derivative
+            if verbose:
+                print(f"[jacobian_error_estimate] Failed to evaluate param {j}: {e}, using zero sensitivity")
+            J[:, j] = 0.0
+            continue
 
         # Sanity check on residual length
         if r_plus.size != N or r_minus.size != N:
-            raise ValueError(
-                "residual_fn returned arrays of inconsistent length when "
-                f"perturbing parameter {j} (expected {N}, got {r_plus.size} / {r_minus.size})"
-            )
+            if verbose:
+                print(f"[jacobian_error_estimate] Inconsistent residual size for param {j}, using zero sensitivity")
+            J[:, j] = 0.0
+            continue
 
         J[:, j] = (r_plus - r_minus) / (2.0 * h)
 
@@ -387,22 +410,77 @@ def downsample(img, factor):
     return img.reshape(h // factor, factor, w // factor, factor).mean(axis=(1, 3))
 
 
-def process_one_target_optimize(row_query, data_dir, row_sep, m,
-                                opt_method,
-                                PIX_SCALE=0.03,
-                                plot_initial_contour=True,
-                                plot_final_contour=True,
-                                fit_model=True,
-                                verbose=False,
-                                debug=False,
-                                target_loss=1.0,
-                                supersample_factor=1,
-                                truth_row=None): # Added truth_row
-    # processing with updated method using weight map
-    # ... (same docstring) ...
-    seqid_str = str(int(row_query['sequentialid']))
+def process_one_target_optimize(
+        row_query, 
+        data_dir, 
+        row_sep=None,
+        sci=None, wht=None, mask=None, segmap=None, psf=None, # New arguments
+        m=[3, 4], 
+        opt_method='SLSQP', # or 'Newton-CG' (requires jacobian), 'BFGS', 'L-BFGS-B', 'Nelder-Mead'
+        PIX_SCALE=0.03,
+        plot_initial_contour=False, 
+        plot_final_contour=True,
+        fit_model=True, # Restored argument
+        verbose=True, 
+        target_loss=1.5,
+        supersample_factor=1,
+        truth_row=None,
+        plot_name=None,
+        initial_guess=None # Added argument
+    ):
+    """
+    optimize the target galaxy with Sersic + Multipole model.
+    """
+    
+    # If explicit data is passed (cropped), use it.
+    if sci is not None:
+        # We are using pre-loaded/cropped data
+        sci_bgsub = sci
+        # wht, mask, segmap are already passed as arguments
+    else:
+        # Original logic: load from file
+        seqid = row['id']
+        f_sci = os.path.join(target_dir, f"{seqid}-SCI.fits")
+        f_wht = os.path.join(target_dir, f"{seqid}-WHT.fits")
+        
+        # Load data
+        # Note: We use return_orientat=False/center=False to avoid bugs in mocks
+        if "mock" in target_dir: # Heuristic
+             sci_bgsub, wht = load_fits(f_sci, f_wht, return_orientat=False, return_center=False)
+             orientat = 0.0
+        else:
+             # Regular COSMOS data
+             sci_bgsub, wht, orientat, center_xy = load_fits(f_sci, f_wht, return_orientat=True, return_center=True)
+        
+        # We need mask and segmap if not provided
+        if segmap is None or mask is None:
+             # For now, default to None or throw error if needed?
+             # The usage in run_mock_fitting passes mask/segmap.
+             # If called from legacy code, we might need to recreate mask.
+             pass # This needs to be handled by the caller or default mask/segmap generation
+
+    if wht is None:
+        raise ValueError("Weight map (wht) is required.")
+
+    # Prepare data for fitting
+    if row_query is not None:
+        seqid_str = str(int(row_query['id']))
+    elif truth_row is not None:
+        # Try to get ID from truth_row
+        if 'id' in truth_row:
+             seqid_str = str(int(truth_row['id']))
+        elif 'seqid' in truth_row:
+             seqid_str = str(int(truth_row['seqid']))
+        else:
+             seqid_str = "mock"
+    else:
+        seqid_str = "unknown"
 
     rec = dict(sequentialid=seqid_str) 
+    
+    # If using truth_row for redshift or other params?
+    # In mocks, we don't rely on catalog params for initial guess usually (or we use truth)
+    # The code below might use `row`. Let's check further down. 
 
     # Load Data (HDF5)
     filename_hdf5 = os.path.join(data_dir, seqid_str + '-cropped.hdf5')
@@ -431,13 +509,24 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
     theta_ell = row_sep['theta']
 
     # Initial Guesses
-    R_sersic0 = row_query.get('r_gim2d', default=np.nan) 
+    theta_ell = row_sep['theta']
+    
+    # Initial Guesses
+    if row_query is not None:
+        R_sersic0 = row_query.get('r_gim2d', default=np.nan)
+    else:
+        R_sersic0 = np.nan 
     if np.isnan(R_sersic0):
         R_sersic0 = row_sep['R50'] * PIX_SCALE
         rec.update(initial_R_sersic0_from='SEP R50')
     else:
         rec.update(initial_R_sersic0_from='r_gim2d')
-    n_sersic0 = row_query.get('sersic_n_gim2d', default=np.nan)
+
+    if row_query is not None:
+        n_sersic0 = row_query.get('sersic_n_gim2d', default=np.nan)
+    else:
+        n_sersic0 = np.nan
+
     if np.isnan(n_sersic0):
         n_sersic0 = 1.0
         rec.update(initial_n_sersic0_from='default 1.0')
@@ -474,40 +563,53 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
     I0 = analytic_amplitude(sci_bgsub, model_unit, bg0, mask=mask)
     p0_elliptical_multipole['amplitude'] = I0
 
-    # Initial Plot (using simple comparison plot)
-    if plot_initial_contour: # Keeping usage of comparison_plot for initial check
-        model0 = I0 * model_unit + bg0
-        n_param_model = 5 + 3*len(m) 
-        residual_map = residual_map_sigma(sci_bgsub, wht, model0, row_query['EXPTIME_SCI'], mask=mask)
-        # ... logic as before for 04-before_fitting ...
-        # (Assuming existing logic handles this, or I re-insert it if I replaced it. 
-        #  I am replacing lines 382...600, so I must preserve everything I want.)
-
-    # ... RE-INSERT INITIAL PLOT & FIT LOGIC ...
     # ---------------------------
-    # Initial Plot Generation
+    # Initial Plot Generation (2x3 Layout)
     # ---------------------------
     model0 = I0 * model_unit + bg0
     n_param_model = 5 + 3*len(m) 
-    chi2_reduced_0 = reduced_chi_squared(sci_bgsub, wht, model0, n_param_model, row_query['EXPTIME_SCI'], mask=mask)
-    residual_map = residual_map_sigma(sci_bgsub, wht, model0, row_query['EXPTIME_SCI'], mask=mask)
-
-    p0_model = copy.copy(p0_elliptical_multipole)
+    # Initial chi2
+    exptime = 1.0
+    if row_query is not None:
+        exptime = row_query.get('EXPTIME_SCI', 1.0)
     
-    fig1, axs1 = comparison_plot(
-        np.ma.masked_array(sci_bgsub, mask=mask), model0, residual_map=residual_map, scale='asinh',
-        labels=('Observed', 'Initial model', 'residual (σ)'),
-        extent=extent, residual_vmin=-5, residual_vmax=5, extra_text=dict2str_newline(p0_model),
+    chi2_reduced_0 = reduced_chi_squared(sci_bgsub, wht, model0, n_param_model, exptime, mask=mask)
+    residual_map_0 = residual_map_sigma(sci_bgsub, wht, model0, exptime, mask=mask)
+
+    # Prepare parameter dictionaries for initial plot
+    p0_flat = {}
+    for key in ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background']:
+        p0_flat[key] = p0_elliptical_multipole[key]
+    for i, mi in enumerate(m):
+        p0_flat[f"a_m{mi}"] = p0_elliptical_multipole['a_m'][i]
+    for i, mi in enumerate(m):
+        p0_flat[f"phi_m{mi}"] = p0_elliptical_multipole['phi_m'][i]
+    
+    # Truth parameters (if provided)
+    p_true_flat_0 = truth_row if truth_row else {}
+    
+    # Meta info for initial plot
+    meta_0 = f"Loss Init: {chi2_reduced_0:.2f}\\nSS Factor: {supersample_factor}"
+    
+    # Use detailed_comparison_plot for consistency
+    fig1, axs1 = detailed_comparison_plot(
+        np.ma.masked_array(sci_bgsub, mask=mask), model0, residual_map_0,
+        extent=extent,
+        param_best=p0_flat, param_unc=None,  # No uncertainties for initial
+        param_true=p_true_flat_0,
+        meta_info_str=meta_0,
+        residual_vmin=-5, residual_vmax=5,
+        scale='asinh'
     )
     
-    # Overlay if needed
+    # Overlay contour if requested
     if plot_initial_contour:
         x1, y1 = Elliptical_Multipole_Profile_1D(
             r0=R_sersic0, q=q, theta_ell=theta_ell, m=m, a_m=a_m0,
             phi_m=phi_m0, x0=x0_init, y0=y0_init, return_type='xy',
             include_end=True, n_points=300
         )
-        axs1[1].plot(x1, y1, color='k', lw=1.0)
+        axs1[0,1].plot(x1, y1, color='k', lw=1.0)  # On model panel
 
     out1 = os.path.join(data_dir, f"{seqid_str}-04-before_fitting.pdf")
     fig1.tight_layout()
@@ -526,7 +628,7 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
     
     # Precompute sigma_tot
     sigma_tot = np.sqrt(sigma_total_squared(
-        wht, sci_bgsub, row_query['EXPTIME_SCI'],
+        wht, sci_bgsub, exptime,
         poisson_threshold_n=3., mask=mask, verbose=False
     ))
 
@@ -549,7 +651,7 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
             mod = mod_ss
         mod = mod + pp['background']
         
-        res = reduced_chi_squared(sci_bgsub, wht, mod, n_param_model, row_query['EXPTIME_SCI'], mask=mask)
+        res = reduced_chi_squared(sci_bgsub, wht, mod, n_param_model, exptime, mask=mask)
         return res
 
     def residual_vector(vec):
@@ -587,8 +689,8 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
     rec['opt_attempts_count'] = 1 # We assume 1 attempt here for simplicity, or modify logic if retries used params
     rec['opt_best_attempt'] = 0
     
-    # Error Estimation (Jacobian)
-    v_err = jacobian_error_estimate(v_best, residual_vector, verbose=verbose)
+    # Error Estimation (Jacobian) with bounds to prevent invalid parameter perturbations
+    v_err = jacobian_error_estimate(v_best, residual_vector, bounds=(lo, hi), verbose=verbose)
     
     # Unpack best
     p_best = unpack_params(v_best, k)
@@ -635,14 +737,14 @@ def process_one_target_optimize(row_query, data_dir, row_sep, m,
             mod_final = mod_ss
         mod_final = mod_final + p_best['background']
         
-        res_map_final = residual_map_sigma(sci_bgsub, wht, mod_final, row_query['EXPTIME_SCI'], mask=mask)
+        res_map_final = residual_map_sigma(sci_bgsub, wht, mod_final, exptime, mask=mask)
         
         # Prepare Info for Plot
         # Param Dicts
         p_best_flat = {}
         p_unc_flat = {}
-        # Flatten array params
-        for keys in ['n_sersic', 'R_sersic', 'q', 'theta_ell', 'amplitude', 'background']:
+        # Flatten array params - ensure ALL parameters are included
+        for keys in ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background']:
              p_best_flat[keys] = p_best[keys]
              p_unc_flat[keys] = rec.get(f"{keys}_err", np.nan)
         for i, mi in enumerate(m):

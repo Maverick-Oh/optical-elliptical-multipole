@@ -95,12 +95,16 @@ def load_fits(path_sci: Path,
         assert np.sum(np.isnan(sci)) == 0
         # nan_mask = np.isnan(sci)
         # sci = np.ma.masked_array(sci, mask=nan_mask, fill_value=np.nan) # make data masked array
-        orientat = hdul[0].header['ORIENTAT']
+        if return_orientat:
+            orientat = hdul[0].header['ORIENTAT']
+        else:
+            orientat = 0.0 # Default/Ignored
         #
         if path_wht is not None:
             with fits.open(path_wht) as hdul:
                 wht = hdul[0].data.astype(np.float32)
-            assert np.isclose(orientat, hdul[0].header['ORIENTAT'], 1e-4) # check if orient at matches between sci and wht
+            if return_orientat:
+                assert np.isclose(orientat, hdul[0].header['ORIENTAT'], 1e-4) # check if orient at matches between sci and wht
             #
             my_return = (sci, wht)
             if return_orientat:
