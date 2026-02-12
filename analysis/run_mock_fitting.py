@@ -421,6 +421,25 @@ def run_fitting():
                     # For now, I will raise an error if cropped data is expected but not found.
                     raise FileNotFoundError(f"Cropped HDF5 file not found for {base}. Cannot proceed with new fitting call.")
 
+                # ------------------------------------------------------------------
+                # Verify Masked and Cropped Data (User Request)
+                # ------------------------------------------------------------------
+                plot_03_out = os.path.join(target_d, f"{base}-03-masked_and_cropped.pdf")
+                print(f"  Attempting to save 03 plot to: {plot_03_out}")
+                try:
+                    plot_masked_and_cropped(
+                        sci_crop, msk_crop, wht=wht_crop, 
+                        extent=None, # Pixel coords
+                        filename_sci=f"{base}-SCI.fits",
+                        out_path=plot_03_out
+                    )
+                    if os.path.exists(plot_03_out):
+                        print(f"  SUCCESS: 03 plot created.")
+                    else:
+                        print(f"  FAILURE: 03 plot NOT created despite no exception.")
+                except Exception as e:
+                    print(f"  Warning: Failed to create 03-masked_and_cropped: {e}")
+
 
                 rec_fit = process_one_target_optimize(
                     row_query=None, 

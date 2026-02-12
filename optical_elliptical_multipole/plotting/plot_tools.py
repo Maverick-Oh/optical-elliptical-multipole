@@ -12,7 +12,10 @@ def AsinhStretchPlot(axis, data, a=0.1, vmin=None, vmax=None, return_norm=False,
     if vmax is None:
         vmax = np.nanmax(data)
 
-    norm = ImageNormalize(vmin=vmin, vmax=vmax, stretch=AsinhStretch(a=a))
+    norm = kwargs.pop('norm', None)
+    if norm is None:
+        norm = ImageNormalize(vmin=vmin, vmax=vmax, stretch=AsinhStretch(a=a))
+    
     im = axis.imshow(data, *args, norm=norm, **kwargs)
     if return_norm:
         return im, norm
@@ -127,8 +130,8 @@ def detailed_comparison_plot(im1, im2, residual_map, *,
     vmax = np.nanmax([np.nanmax(im1_disp), np.nanmax(im2_disp)])
     
     if scale == 'asinh':
-        h1 = AsinhStretchPlot(axs[0,0], im1_disp, a=a, vmin=vmin, vmax=vmax, extent=extent, origin='lower', aspect='equal')
-        h2 = AsinhStretchPlot(axs[0,1], im2_disp, a=a, vmin=vmin, vmax=vmax, extent=extent, origin='lower', aspect='equal')
+        h1, norm = AsinhStretchPlot(axs[0,0], im1_disp, a=a, vmin=vmin, vmax=vmax, extent=extent, origin='lower', aspect='equal', return_norm=True)
+        h2 = AsinhStretchPlot(axs[0,1], im2_disp, a=a, vmin=vmin, vmax=vmax, extent=extent, origin='lower', aspect='equal', norm=norm)
     else:
         h1 = axs[0,0].imshow(im1_disp, extent=extent, origin='lower', aspect='equal', vmin=vmin, vmax=vmax)
         h2 = axs[0,1].imshow(im2_disp, extent=extent, origin='lower', aspect='equal', vmin=vmin, vmax=vmax)
@@ -276,3 +279,38 @@ def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zer
     if title is not None:
         ax.set_title(title)
     return im, cmap
+
+def plot_masked_and_cropped(sci, mask, wht=None, extent=None, filename_sci=None, out_path=None):
+    """
+    Generate the *-03-masked_and_cropped.pdf plot.
+    Shows the Science image with mask applied (NaNs) to verify input data.
+    """
+    fig, axs = plt.subplots(1, 2 if wht is not None else 1, figsize=(10 if wht is not None else 5, 5))
+    if wht is None:
+        axs = [axs]
+        
+    # Prepare masked array
+    sci_masked = np.ma.masked_array(sci, mask=mask)
+    
+    # Plot Science
+    h1 = AsinhStretchPlot(axs[0], sci_masked, a=0.1, extent=extent, origin='lower')
+    axs[0].set_title('Masked & Cropped SCI')
+    fig.colorbar(h1, ax=axs[0], fraction=0.046, pad=0.04)
+    
+    # Plot Weight if provided
+    if wht is not None:
+        # Weight usually visualized linear or asinh
+        h2 = AsinhStretchPlot(axs[1], wht, a=0.1, extent=extent, origin='lower')
+        axs[1].set_title('Cropped WHT')
+        fig.colorbar(h2, ax=axs[1], fraction=0.046, pad=0.04)
+
+    if filename_sci:
+        plt.suptitle(f"File: {os.path.basename(filename_sci)}", fontsize=10)
+        
+    plt.tight_layout()
+    
+    if out_path:
+        plt.savefig(out_path, bbox_inches='tight')
+        plt.close(fig)
+    else:
+        return fig, axs
