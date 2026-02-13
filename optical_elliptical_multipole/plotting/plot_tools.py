@@ -5,6 +5,8 @@ from astropy.visualization import AsinhStretch
 from astropy.visualization.mpl_normalize import ImageNormalize
 import os
 
+from matplotlib.ticker import MaxNLocator
+
 def AsinhStretchPlot(axis, data, a=0.1, vmin=None, vmax=None, return_norm=False, *args, **kwargs):
     # For asinh normalized plot
     if vmin is None:
@@ -257,7 +259,7 @@ def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zer
     cmap.set_bad('k')  # zeros/NaNs shown in blue
 
     im = ax.imshow(base, cmap=cmap, vmin=0, vmax=nlab, **kwargs)
-
+    
     # Optional outline to enhance boundaries
     if outline and np.isfinite(base).any():
         mask_nonzero = np.isfinite(base)
@@ -280,9 +282,9 @@ def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zer
         ax.set_title(title)
     return im, cmap
 
-def plot_masked_and_cropped(sci, mask, wht=None, extent=None, filename_sci=None, out_path=None):
+def plot_masked_and_cropped(sci, mask, wht=None, extent=None, filename_sci=None, out_path=None, cropped=True):
     """
-    Generate the *-03-masked_and_cropped.pdf plot.
+    Generate the *-02-bg_and_segmap.pdf and *-03-masked_and_cropped.pdf plot.
     Shows the Science image with mask applied (NaNs) to verify input data.
     """
     fig, axs = plt.subplots(1, 2 if wht is not None else 1, figsize=(10 if wht is not None else 5, 5))
@@ -294,14 +296,20 @@ def plot_masked_and_cropped(sci, mask, wht=None, extent=None, filename_sci=None,
     
     # Plot Science
     h1 = AsinhStretchPlot(axs[0], sci_masked, a=0.1, extent=extent, origin='lower')
-    axs[0].set_title('Masked & Cropped SCI')
+    if cropped:
+        axs[0].set_title('Masked & Cropped SCI')
+    else:
+        axs[0].set_title('Masked SCI')
     fig.colorbar(h1, ax=axs[0], fraction=0.046, pad=0.04)
     
     # Plot Weight if provided
     if wht is not None:
         # Weight usually visualized linear or asinh
         h2 = AsinhStretchPlot(axs[1], wht, a=0.1, extent=extent, origin='lower')
-        axs[1].set_title('Cropped WHT')
+        if cropped:
+            axs[1].set_title('Cropped WHT')
+        else:
+            axs[1].set_title('WHT')
         fig.colorbar(h2, ax=axs[1], fraction=0.046, pad=0.04)
 
     if filename_sci:
@@ -314,3 +322,65 @@ def plot_masked_and_cropped(sci, mask, wht=None, extent=None, filename_sci=None,
         plt.close(fig)
     else:
         return fig, axs
+
+def plot_sep_steps(sci, sci_bgsub, wht, segmap, 
+                   target_label=None, target_xy=None, 
+                   extent=None, filename_sci=None, out_path=None):
+    """
+    Generate the 5-panel plot showing SCI, SCI-BKG, WHT, 1/sqrt(WHT), and Segmentation.
+    Replicates the style from preprocess_COSMOS_w_source_extractor.py.
+    """
+    fig_hw_unit_inch = 5
+    fig, axes = plt.subplots(1, 5, figsize=(fig_hw_unit_inch*5, fig_hw_unit_inch))
+    
+    # Set titles
+    axes[0].set_title("SCI")
+    axes[1].set_title("SCI - BKG")
+    axes[2].set_title("WHT")
+    axes[3].set_title("1/sqrt(WHT)")
+    
+    # 1. SCI
+    im_img, norm = AsinhStretchPlot(axes[0], sci, origin="lower", return_norm=True, extent=extent)
+    plt.colorbar(mappable=im_img, ax=axes[0], fraction=0.046, pad=0.04)
+    if target_xy is not None:
+        axes[0].axvline(target_xy[0], ymin=0., ymax=sci.shape[0], color='w',
+                         linewidth=0.5, linestyle='--')
+        axes[0].axhline(target_xy[1], xmin=0., xmax=sci.shape[1], color='w',
+                         linewidth=0.5, linestyle='--')
+
+    # 2. SCI - BKG
+    im_img_bkgsub = axes[1].imshow(sci_bgsub, origin="lower", norm=norm, extent=extent)
+    plt.colorbar(mappable=im_img_bkgsub, ax=axes[1], fraction=0.046, pad=0.04)
+
+    # 3. WHT
+    im_wht = AsinhStretchPlot(axes[2], wht, origin='lower', extent=extent)
+    plt.colorbar(mappable=im_wht, ax=axes[2], fraction=0.046, pad=0.04)
+
+    # 4. 1/sqrt(WHT) aka RMS
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rms = 1.0/np.sqrt(wht)
+    im_wht_sqrt_inverse = AsinhStretchPlot(axes[3], rms, origin='lower', extent=extent)
+    plt.colorbar(mappable=im_wht_sqrt_inverse, ax=axes[3], fraction=0.046, pad=0.04)
+
+    # 5. Segmentation
+    im, cmap = draw_segmentation(axes[4], segmap, title='Segmentation', target_label=target_label,
+                        outline = False, origin='lower', extent=extent)
+    cbar = plt.colorbar(mappable=im, ax=axes[4], fraction=0.046, pad=0.04)
+    cbar.locator = MaxNLocator(integer=True, nbins=5)
+    cbar.update_ticks()
+
+    for ax in axes:
+        ax.set_aspect('equal')
+        ax.set_xlabel('x (px)')
+
+    if filename_sci:
+        fig.suptitle(f"File: {os.path.basename(filename_sci)}", fontsize=16)
+
+    fig.tight_layout()
+    
+    if out_path:
+        fig.savefig(out_path)
+        plt.close(fig)
+    else:
+        return fig, axes
+

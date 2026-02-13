@@ -11,9 +11,9 @@ import warnings
 PIX_SCALE = 0.03 # arcsec/pixel
 SUPERSAMPLE_FACTOR = 10
 EXPTIME = 4056.0 # seconds (Updated per user request)
-RMS_NOISE = 0.002 # Gaussian RMS assumption (gives SNR ~25 for Amp=0.05)
+RMS_NOISE = 0.005 # Gaussian RMS assumption (gives SNR ~25 for Amp=0.05)
 WHT_VALUE = 1.0 / (RMS_NOISE**2) 
-IMG_SIZE = 81 # 81x81 pixels -> ~2.4 arcsec box (enough for R_sersic up to ~2, but user wants up to 51.2??)
+# IMG_SIZE = 81 # 81x81 pixels -> ~2.4 arcsec box (enough for R_sersic up to ~2, but user wants up to 51.2??)
 
 # User wanted R_sersic up to 51.2 arcsec.
 # If R_sersic = 51.2, we need a HUGE box.
@@ -23,8 +23,8 @@ IMG_SIZE = 81 # 81x81 pixels -> ~2.4 arcsec box (enough for R_sersic up to ~2, b
 
 DEFAULT_PARAMS = {
     'n_sersic': 4.0,
-    'R_sersic': 0.4,
-    'amplitude': 0.05,
+    'R_sersic': 0.2,
+    'amplitude': 0.03,
     'q': 0.8,
     'theta_ell': 0.0,
     'x0': 0.0,
@@ -42,10 +42,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(HERE)
 OUTPUT_BASE = os.path.join(PROJECT_ROOT, "data")
 
-def get_grid_size(R_sersic):
-    # Rule: 10 * R_sersic
+def get_grid_size(R_sersic, factor=10):
+    # Rule: factor * R_sersic
     # Convert to pixels
-    box_arcsec = 10 * R_sersic
+    box_arcsec = factor * R_sersic
     box_pix = int(np.ceil(box_arcsec / PIX_SCALE))
     # Ensure odd
     if box_pix % 2 == 0:
@@ -120,6 +120,7 @@ def run_simulation():
             if nx * factor > MAX_FINE_SIDE:
                 new_factor = max(1, MAX_FINE_SIDE // nx)
                 if new_factor < factor:
+                    print('R_sersic: ', p['R_sersic'])
                     print(f"  WARNING: Image too large ({nx}x{nx}) for 10x supersampling. Reducing factor {factor} -> {new_factor}")
                     factor = new_factor
             
@@ -214,15 +215,15 @@ def run_simulation():
             rec['value_varied'] = val
             records.append(rec)
             
-            # Save HDF5 for tools_fitting compatibility
-            hdf5_fn = os.path.join(out_dir, f"{seq_id}-cropped.hdf5")
-            with h5py.File(hdf5_fn, "w") as f:
-                # sci_bgsub_crop, wht_crop, mask_crop, segmap_crop
-                f.create_dataset("sci_bgsub_crop", data=SCI)
-                f.create_dataset("wht_crop", data=WHT)
-                # mask: False = good pixel
-                f.create_dataset("mask_crop", data=np.zeros_like(SCI, dtype=bool))
-                f.create_dataset("segmap_crop", data=np.zeros_like(SCI, dtype=int))
+            # # Save HDF5 for tools_fitting compatibility
+            # hdf5_fn = os.path.join(out_dir, f"{seq_id}-cropped.hdf5")
+            # with h5py.File(hdf5_fn, "w") as f:
+            #     # sci_bgsub_crop, wht_crop, mask_crop, segmap_crop
+            #     f.create_dataset("sci_bgsub_crop", data=SCI)
+            #     f.create_dataset("wht_crop", data=WHT)
+            #     # mask: False = good pixel
+            #     f.create_dataset("mask_crop", data=np.zeros_like(SCI, dtype=bool))
+            #     f.create_dataset("segmap_crop", data=np.zeros_like(SCI, dtype=int))
 
             
         # Save Truth CSV

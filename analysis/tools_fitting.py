@@ -589,7 +589,7 @@ def process_one_target_optimize(
     p_true_flat_0 = truth_row if truth_row else {}
     
     # Meta info for initial plot
-    meta_0 = f"Loss Init: {chi2_reduced_0:.2f}\\nSS Factor: {supersample_factor}"
+    meta_0 = f"Loss Init: {chi2_reduced_0:.2f}\nSS Factor: {supersample_factor}"
     
     # Use detailed_comparison_plot for consistency
     fig1, axs1 = detailed_comparison_plot(
@@ -675,24 +675,139 @@ def process_one_target_optimize(
             valid = (~mask) & np.isfinite(diff) & np.isfinite(sigma_tot)
         else:
             valid = np.isfinite(diff) & np.isfinite(sigma_tot)
-        if not np.any(valid): return np.array([], dtype=float)
+        
         return diff[valid] / sigma_tot[valid]
-
-    # Run Optimization
-    v0 = pack_params(p0_elliptical_multipole, k)
-    start_time = time.time()
-    res = configured_optimizer(loss, v0, lo, hi, opt_method)
+    # Run Optimization Loop
+    # Strategy sequence: 
+    # 1. opt_method (default SLSQP)
+    # 2. L-BFGS-B
+    # 3. trust-constr
+    strategies = []
+    if opt_method not in strategies: strategies.append(opt_method)
+    if 'L-BFGS-B' not in strategies: strategies.append('L-BFGS-B')
+    if 'trust-constr' not in strategies: strategies.append('trust-constr')
     
-    # Handle Result
-    v_best = res.x
-    rec['loss_final'] = res.fun
-    rec['opt_attempts_count'] = 1 # We assume 1 attempt here for simplicity, or modify logic if retries used params
-    rec['opt_best_attempt'] = 0
+    max_strategies = len(strategies)
+    best_res = None
+    best_loss = np.inf
+    final_v_best = None
+    final_attempt_count = 0
+    
+    # Define bounds once (lo, hi are already defined)
+    idx_phi_start = 5 + k
+    phi_lo = lo[idx_phi_start : idx_phi_start+k]
+    phi_hi = hi[idx_phi_start : idx_phi_start+k]
+    
+    # Tolerance for boundary check
+    tol = 1e-3
+
+    found_satisfactory_solution = False
+
+    for attempt_idx, current_method in enumerate(strategies):
+        if verbose:
+            print(f"Optimization Strategy {attempt_idx+1}/{max_strategies}: {current_method}")
+        
+        # We start with v0. If previous attempt failed, do we restart from p0 (initial guess) or 
+        # from the previous result?
+        # Usually restarting from strict initial guess is safer if we suspect getting stuck in bad local minima.
+        # But if we just want to refine, we use previous result.
+        # User instruction implies "retry", effectively a new attempt to fit.
+        # However, for boundary flipping, we modify v0 specifically.
+        # Let's stick to using v0 (which is packed from p0_elliptical_multipole or modified by boundary flip).
+        # Important: Reset v0 to original guess for a NEW strategy? 
+        # Or keep the "flipped" v0 if that was the best idea?
+        # Simpler approach: Always start from the best known configuration or the initial one?
+        # Let's assume we start from the provided p0 (v0) for each new strategy to be independent,
+        # UNLESS we updated v0 explicitly.
+        # Actually, let's keep v0 as the starting point.
+        
+        # Sub-loop for boundary retry (max 1 retry per strategy)
+        boundary_retry_count = 0
+        max_boundary_retries = 1
+        
+        # We need a working v0 for this strategy loop
+        v_start = pack_params(p0_elliptical_multipole.copy(),k)
+        
+        while boundary_retry_count <= max_boundary_retries:
+            start_time = time.time()
+            res = configured_optimizer(loss, v_start, lo, hi, current_method)
+            
+            # Check result
+            current_loss = res.fun
+            
+            # Track best global result
+            if current_loss < best_loss:
+                best_loss = current_loss
+                best_res = res
+                final_v_best = res.x
+                final_attempt_count = attempt_idx + 1 # 1-based index of strategy used
+
+            # 1. Check Target Loss
+            if current_loss <= target_loss:
+                if verbose:
+                    print(f"  Target loss met ({current_loss:.3f} <= {target_loss}). Stopping.")
+                found_satisfactory_solution = True
+                break # Break boundary loop
+            
+            # 2. Check Boundaries if loss not met
+            # Unpack best params from this run
+            p_current = unpack_params(res.x, k)
+            phi_current = p_current['phi_m']
+            a_current = p_current['a_m']
+            
+            hit_boundary = False
+            new_p = p_current.copy()
+            
+            for i in range(k):
+                # Check lower bound
+                if abs(phi_current[i] - phi_lo[i]) < tol:
+                    if verbose:
+                        print(f"  Mode m={m[i]}: phi hit lower bound {phi_lo[i]:.3f}.")
+                    # Flip strategy: a -> -a, phi -> upper bound
+                    new_p['a_m'][i] = -a_current[i]
+                    new_p['phi_m'][i] = phi_hi[i] - tol*2
+                    hit_boundary = True
+                    
+                # Check upper bound
+                elif abs(phi_current[i] - phi_hi[i]) < tol:
+                    if verbose:
+                        print(f"  Mode m={m[i]}: phi hit upper bound {phi_hi[i]:.3f}.")
+                    # Flip strategy: a -> -a, phi -> lower bound
+                    new_p['a_m'][i] = -a_current[i]
+                    new_p['phi_m'][i] = phi_lo[i] + tol*2
+                    hit_boundary = True
+            
+            if hit_boundary:
+                if boundary_retry_count < max_boundary_retries:
+                    if verbose:
+                        print("  Boundary hit detected. Flipping parameters and retrying (Same Strategy).")
+                    # Update v_start for the retry
+                    v_start = pack_params(new_p, k)
+                    boundary_retry_count += 1
+                    continue # Run loop again with new v_start
+                else:
+                    if verbose:
+                        print("  Boundary hit detected, but max boundary retries reached.")
+                    break # Break boundary loop, move to next strategy check
+            else:
+                # No boundary hit, but loss target not met
+                if verbose:
+                    print(f"  No boundary hit, but loss {current_loss:.3f} > {target_loss}.")
+                break # Break boundary loop, move to next strategy check
+
+        if found_satisfactory_solution:
+            break # Break strategy loop
+
+    # Handle Result (Use best found)
+    v_best = final_v_best
+    res = best_res # Ensure we have the res object correspond to v_best
+    rec['loss_final'] = best_loss
+    rec['opt_attempts_count'] = final_attempt_count
+    rec['opt_best_attempt'] = final_attempt_count - 1 # 0-indexed best attempt
     
     # Error Estimation (Jacobian) with bounds to prevent invalid parameter perturbations
     v_err = jacobian_error_estimate(v_best, residual_vector, bounds=(lo, hi), verbose=verbose)
     
-    # Unpack best
     p_best = unpack_params(v_best, k)
     p_best['supersample_factor'] = supersample_factor
     
