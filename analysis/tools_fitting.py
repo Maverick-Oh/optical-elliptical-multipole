@@ -692,6 +692,7 @@ def process_one_target_optimize(
     best_loss = np.inf
     final_v_best = None
     final_attempt_count = 0
+    best_strategy_name = None
     
     # Define bounds once (lo, hi are already defined)
     idx_phi_start = 5 + k
@@ -741,6 +742,7 @@ def process_one_target_optimize(
                 best_res = res
                 final_v_best = res.x
                 final_attempt_count = attempt_idx + 1 # 1-based index of strategy used
+                best_strategy_name = current_method
 
             # 1. Check Target Loss
             if current_loss <= target_loss:
@@ -804,6 +806,7 @@ def process_one_target_optimize(
     rec['loss_final'] = best_loss
     rec['opt_attempts_count'] = final_attempt_count
     rec['opt_best_attempt'] = final_attempt_count - 1 # 0-indexed best attempt
+    rec['opt_best_strategy'] = best_strategy_name
     
     # Error Estimation (Jacobian) with bounds to prevent invalid parameter perturbations
     v_err = jacobian_error_estimate(v_best, residual_vector, bounds=(lo, hi), verbose=verbose)

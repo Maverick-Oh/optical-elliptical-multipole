@@ -82,12 +82,6 @@ from tqdm import tqdm # Progress bar
 if debug_plots:
     import matplotlib.pyplot as plt
 
-# Configuration
-HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(HERE)
-DATA_DIR_BASE = os.path.join(PROJECT_ROOT, "data")
-OUTPUT_FILENAME = "fitting_results.csv"
-
 def preprocess_directory(d):
     """
     Run Source Extractor Preprocessing on all FITS in directory d.
@@ -285,7 +279,7 @@ def run_fitting():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pattern", type=str, default='mock_varying_theta_ell', help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
-    parser.add_argument("--supersample", type=int, default=1, help="Supersampling factor for fitting (default 1)")
+    parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
     parser.add_argument("--source-dir", type=str, default='../data/mock_test', help="Directory containing source mock_varying_* folders (default: data/)")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory root (e.g. data/mock_fitting-0201-1)")
     parser.add_argument("--skip-fitting", action="store_true", help="Skip fitting")
@@ -524,7 +518,7 @@ def run_fitting():
                     plot_final_contour=True, 
                     supersample_factor=args.supersample,
                     truth_row=row_truth,
-                    target_loss=0.5
+                    target_loss=0.3
                 )
                 print(f"  Fit finished for {base}.")
 

@@ -195,16 +195,16 @@ def detailed_comparison_plot(im1, im2, residual_map, *,
         
         return "\n".join(lines)
     
-    # Ax[1,0]: Best Fit or Initial Parameters + Uncertainty
-    title_left = "Best Fit Parameters:" if param_unc else "Initial Parameters:"
-    text_best = f"{title_left}\n" + "-" * len(title_left) + "\n" + format_params(param_best, param_unc)
-    axs[1,0].text(0.05, 0.95, text_best, transform=axs[1,0].transAxes, 
+    # Ax[1,0]: True Parameters
+    text_true = "True Parameters:\n" + "-" * 16 + "\n" + format_params(param_true)
+    axs[1,0].text(0.05, 0.95, text_true, transform=axs[1,1].transAxes, 
                   verticalalignment='top', fontsize=9, family='monospace')
     axs[1,0].axis('off')
 
-    # Ax[1,1]: True Parameters
-    text_true = "True Parameters:\n" + "-" * 16 + "\n" + format_params(param_true)
-    axs[1,1].text(0.05, 0.95, text_true, transform=axs[1,1].transAxes, 
+    # Ax[1,1]: Best Fit or Initial Parameters + Uncertainty
+    title_left = "Best Fit Parameters:" if param_unc else "Initial Parameters:"
+    text_best = f"{title_left}\n" + "-" * len(title_left) + "\n" + format_params(param_best, param_unc)
+    axs[1,1].text(0.05, 0.95, text_best, transform=axs[1,0].transAxes, 
                   verticalalignment='top', fontsize=9, family='monospace')
     axs[1,1].axis('off')
 
