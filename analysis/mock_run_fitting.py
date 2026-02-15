@@ -277,7 +277,10 @@ def preprocess_directory(d):
 
 def run_fitting():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pattern", type=str, default='mock_varying_theta_ell', help="Process only dirs matching pattern")
+    parser.add_argument("--pattern", 
+    type=str, 
+    default=None, # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
+    help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
     parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
     parser.add_argument("--source-dir", type=str, default='../data/mock_test', help="Directory containing source mock_varying_* folders (default: data/)")
