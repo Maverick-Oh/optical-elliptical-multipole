@@ -569,10 +569,14 @@ def process_one_target_optimize(
     model0 = I0 * model_unit + bg0
     n_param_model = 5 + 3*len(m) 
     # Initial chi2
-    exptime = 1.0
+    exptime = np.nan
     if row_query is not None:
         exptime = row_query.get('EXPTIME_SCI', 1.0)
-    
+    elif truth_row is not None:
+        exptime = truth_row.get('EXPTIME_SCI', 1.0)
+    if np.isnan(exptime):
+        raise ValueError("EXPTIME_SCI is NaN.")
+
     chi2_reduced_0 = reduced_chi_squared(sci_bgsub, wht, model0, n_param_model, exptime, mask=mask)
     residual_map_0 = residual_map_sigma(sci_bgsub, wht, model0, exptime, mask=mask)
 
@@ -685,7 +689,7 @@ def process_one_target_optimize(
     strategies = []
     if opt_method not in strategies: strategies.append(opt_method)
     if 'L-BFGS-B' not in strategies: strategies.append('L-BFGS-B')
-    if 'trust-constr' not in strategies: strategies.append('trust-constr')
+    # if 'trust-constr' not in strategies: strategies.append('trust-constr')
     
     max_strategies = len(strategies)
     best_res = None
@@ -704,34 +708,27 @@ def process_one_target_optimize(
 
     found_satisfactory_solution = False
 
+    v_start = pack_params(p0_elliptical_multipole.copy(),k)
+    
     for attempt_idx, current_method in enumerate(strategies):
         if verbose:
             print(f"Optimization Strategy {attempt_idx+1}/{max_strategies}: {current_method}")
         
-        # We start with v0. If previous attempt failed, do we restart from p0 (initial guess) or 
-        # from the previous result?
-        # Usually restarting from strict initial guess is safer if we suspect getting stuck in bad local minima.
-        # But if we just want to refine, we use previous result.
-        # User instruction implies "retry", effectively a new attempt to fit.
-        # However, for boundary flipping, we modify v0 specifically.
-        # Let's stick to using v0 (which is packed from p0_elliptical_multipole or modified by boundary flip).
-        # Important: Reset v0 to original guess for a NEW strategy? 
-        # Or keep the "flipped" v0 if that was the best idea?
-        # Simpler approach: Always start from the best known configuration or the initial one?
-        # Let's assume we start from the provided p0 (v0) for each new strategy to be independent,
-        # UNLESS we updated v0 explicitly.
-        # Actually, let's keep v0 as the starting point.
+        # Use v_start from stages as initial guess
+        # v_start is modified in place during stages, so it carries over
+        # For each strategy, we can restart from the BEST stage result (v_start)
         
         # Sub-loop for boundary retry (max 1 retry per strategy)
         boundary_retry_count = 0
         max_boundary_retries = 1
         
-        # We need a working v0 for this strategy loop
-        v_start = pack_params(p0_elliptical_multipole.copy(),k)
+        # Make a local copy for this strategy loop
+        v_run = v_start.copy() 
         
         while boundary_retry_count <= max_boundary_retries:
+            print("fitting!")
             start_time = time.time()
-            res = configured_optimizer(loss, v_start, lo, hi, current_method)
+            res = configured_optimizer(loss, v_run, lo, hi, current_method)
             
             # Check result
             current_loss = res.fun
@@ -783,19 +780,19 @@ def process_one_target_optimize(
                 if boundary_retry_count < max_boundary_retries:
                     if verbose:
                         print("  Boundary hit detected. Flipping parameters and retrying (Same Strategy).")
-                    # Update v_start for the retry
-                    v_start = pack_params(new_p, k)
+                    # Update v_run for the retry
+                    v_run = pack_params(new_p, k)
                     boundary_retry_count += 1
-                    continue # Run loop again with new v_start
+                    continue # Run loop again with new v_run
                 else:
                     if verbose:
                         print("  Boundary hit detected, but max boundary retries reached.")
                     break # Break boundary loop, move to next strategy check
-            else:
-                # No boundary hit, but loss target not met
                 if verbose:
                     print(f"  No boundary hit, but loss {current_loss:.3f} > {target_loss}.")
                 break # Break boundary loop, move to next strategy check
+
+            boundary_retry_count += 1
 
         if found_satisfactory_solution:
             break # Break strategy loop

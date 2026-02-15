@@ -65,7 +65,7 @@ def run_simulation():
     # Define Variations
     variations = {
         'n_sersic': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        'R_sersic': [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8],
+        'R_sersic': [0.1, 0.2, 0.4, 0.8],
         'amplitude': [1e-3, 5e-3, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
         'q': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99],
         'theta_ell': [0, np.pi/8, np.pi/4, 3*np.pi/8, np.pi/2, 5*np.pi/8, 3*np.pi/4, 7*np.pi/8, np.pi],
@@ -213,6 +213,7 @@ def run_simulation():
             rec['filename_sci'] = sci_fn
             rec['param_varied'] = param_name
             rec['value_varied'] = val
+            rec['EXPTIME_SCI'] = EXPTIME
             records.append(rec)
             
             # # Save HDF5 for tools_fitting compatibility

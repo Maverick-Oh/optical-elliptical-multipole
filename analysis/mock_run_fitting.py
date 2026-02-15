@@ -518,7 +518,7 @@ def run_fitting():
                     plot_final_contour=True, 
                     supersample_factor=args.supersample,
                     truth_row=row_truth,
-                    target_loss=0.3
+                    target_loss=1.1
                 )
                 print(f"  Fit finished for {base}.")
 
