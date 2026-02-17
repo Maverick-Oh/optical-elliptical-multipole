@@ -813,9 +813,9 @@ def process_one_target_optimize(
     
     # Update Rec
     for k_ in p_best:
-        if isinstance(p_best[k_], np.ndarray):
+        if isinstance(p_best[k_], np.ndarray): # for a_m and phi_m
              for i, val in enumerate(p_best[k_]):
-                 rec[f"{k_}{i if k_ in ['a_m', 'phi_m'] else ''}_best"] = val
+                 rec[f"{k_}{m[i] if k_ in ['a_m', 'phi_m'] else i}_best"] = val
         else:
             rec[f"{k_}_best"] = p_best[k_]
             

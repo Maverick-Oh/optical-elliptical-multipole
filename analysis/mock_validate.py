@@ -46,8 +46,11 @@ def validate_results(data_dir):
         
         # Merge on seqid
         df_truth['seqid'] = df_truth['seqid'].astype(str)
-        df_fit['seqid'] = df_fit['seqid'].astype(str)
-        
+        df_fit['seqid'] = df_fit['sequentialid'].astype(str)
+        for key in list(df_fit.keys()):
+            if '_true' in key:
+                print("Dropping the following column from fitting result for a safe merge: ", key)
+                df_fit.drop(columns=[key], inplace=True)
         # Rename columns in df_fit: remove '_best' suffix to align with Truth for easy comparison
         rename_map = {}
         for c in df_fit.columns:
@@ -142,7 +145,8 @@ def validate_results(data_dir):
             ax.axhline(1.0, color='k', linestyle=':')
             ax.set_xlabel(f"True {param_name}")
             ax.set_ylabel(chi2_col)
-            ax.set_title("Goodness of Fit")
+            ax.set_title("Goodness of Fit (final reduced chi^2)")
+            ax.set_yscale('log')
             
         plt.tight_layout()
         plt.savefig(os.path.join(PLOT_DIR, f"validate_{param_name}.pdf"))
@@ -177,10 +181,14 @@ def validate_results(data_dir):
             # Plot 2: Chi2 vs Varied Parameter
             ax = axes2[1]
             if chi2_col:
-                ax.semilogx(x_varied, merged[chi2_col], 'o', color='r', alpha=0.5)
+                ax.axhline(1.0, color='k', linestyle=':', label='reduced chi^2 =1')
+                ax.axhline(2.0, color='k', linestyle='--', label='reduced chi^2 =2')
+                ax.plot(x_varied, merged[chi2_col], 'o', color='r', alpha=0.5)
                 ax.set_xlabel(xlab)
-                ax.set_ylabel("Chi2 / Loss")
+                ax.set_ylabel("Reduced Chi^2")
                 ax.set_title(f"Fit Quality vs {param_name}")
+                ax.set_yscale('log')
+                ax.legend()
                     
             plt.tight_layout()
             plt.savefig(os.path.join(PLOT_DIR, f"multipoles_reliability_{param_name}.pdf"))
@@ -204,8 +212,10 @@ def validate_results(data_dir):
         print(df_sum)
 
 if __name__ == "__main__":
+    # usage example:
+    # python mock_validate.py --data-dir ../data/mock_test
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=True, help="Directory containing mock_varying_* folders")
+    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test", help="Directory containing mock_varying_* folders")
     args = parser.parse_args()
     
     if os.path.exists(args.data_dir):

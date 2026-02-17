@@ -279,7 +279,7 @@ def run_fitting():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pattern", 
     type=str, 
-    default=None, # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
+    default='mock_varying_a_m3', # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
     help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
     parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
@@ -530,9 +530,9 @@ def run_fitting():
                 rec_fit['filename'] = base
                 
                 # Add truth
-                if row_truth:
-                    for k, v in row_truth.items():
-                        rec_fit[f"{k}_true"] = v
+                # if row_truth:
+                #     for k, v in row_truth.items():
+                #         rec_fit[f"{k}_true"] = v
                 
                 results.append(rec_fit)
                 
@@ -549,4 +549,7 @@ def run_fitting():
                 traceback.print_exc()
 
 if __name__ == "__main__":
+    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_phi_m3 &
+    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_a_m4 &
+    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_phi_m4 &
     run_fitting()
