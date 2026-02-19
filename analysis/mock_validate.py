@@ -529,7 +529,7 @@ if __name__ == "__main__":
     # usage example:
     # python mock_validate.py --data-dir ../data/mock_test
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_stronger_a_m", help="Directory containing mock_varying_* folders")
+    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_weak_a_m", help="Directory containing mock_varying_* folders")
     args = parser.parse_args()
     
     if os.path.exists(args.data_dir):

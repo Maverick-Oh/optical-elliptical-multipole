@@ -19,3 +19,4 @@ optical_elliptical_multipole.egg-info
 *.pdf
 obs
 test_source_extractor
+analysis/nonjax_jax_comparison
