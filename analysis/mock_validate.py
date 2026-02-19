@@ -40,6 +40,8 @@ def validate_results(data_dir):
         try:
             df_truth = pd.read_csv(truth_file)
             df_fit = pd.read_csv(fit_file)
+            if 'theta_ell' in d:
+                print('debug')
         except Exception as e:
             print(f"    Error reading CSVs: {e}")
             continue
@@ -80,33 +82,78 @@ def validate_results(data_dir):
             pass
 
         # --- General Plots ---
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(1, 4, figsize=(24, 5))
         
         # 1. Recovery of Varied Param
         ax = axes[0]
+        outliers = pd.DataFrame()
+        n_out = 0
+        
         if col_true in merged.columns and col_rec in merged.columns:
             x_vals = merged[col_true]
             y_vals = merged[col_rec]
+
+            print('col_true:', col_true)
+
+            if col_true == 'theta_ell_true': # Should this be checking specific name? Or was this legacy? Leaving as matches original logic intent
+                # wrap y_vals within 0-pi!
+                y_vals = y_vals % np.pi
+            
+            # Define limits based on Truth range with some padding
+            # This allows us to catch "fly-away" Rec values
+            x_min, x_max = x_vals.min(), x_vals.max()
+            if x_max != x_min:
+                span = x_max - x_min
+            else:
+                raise ValueError("x_max and x_min are equal, cannot compute span")
+            
+            # Use a generous buffer to include "good" recovery but exclude catastrophic failures
+            # Or use percentiles of y? 
+            # Let's use the union of Truth range and (inner 98% of Rec) to define the specific view?
+            # User phrase "what points are missing" implies we slice.
+            # Let's stick to Truth range + 50% buffer to be safe but catch gross outliers.
+            # Actually, sometimes range is small. Let's try percentile based.
+            
+            # Actually, standard practice: 
+            # But let's respect the user's "missing points" request by ENFORCING a view and showing who is out.
+            
+            view_min = x_min - 0.2 * span
+            view_max = x_max + 0.2 * span
+            
+            # Let's expand view to include most y data if it's reasonable, 
+            # but cap it if it helps invalidating.
+            # Let's use the code's own robust limit logic:
+            # Let's use 1st and 99th percentiles of Y as boundaries if they are not too wild.
+            # y_p01 = np.percentile(y_vals, 1) if len(y_vals) > 0 else view_min
+            # y_p99 = np.percentile(y_vals, 99) if len(y_vals) > 0 else view_max
+            
+            # final_min = min(view_min, y_p01)
+            # final_max = max(view_max, y_p99)
+            final_min = view_min
+            final_max = view_max
+            
+            # Check for outliers outside THIS range
+            mask_out = (y_vals < final_min) | (y_vals > final_max)
+            n_out = mask_out.sum()
+            outliers = merged[mask_out]
+            if len(outliers) > 0:
+                print(f"Outliers for {param_name}:\n{outliers}")
             
             # Error bars?
             y_err = None
             err_col = None
-            # Search for error column
             candidates = [f'{param_name}_err', f'err_{param_name}', f'{param_name}_error']
             for c in candidates:
                 if c in merged.columns: err_col=c; break
             
-            # If not found in merged (because it was in fit only and didn't collide), maybe it's without suffix?
             if not err_col:
-                # Check df_fit columns in merged (they might have _rec suffix if collision, or no suffix if no collision?)
-                # Wait, merge adds suffix to OVERLAPPING columns.
-                # error columns are usually NOT in truth. So they won't have _rec suffix.
                 for c in merged.columns:
                     if c.endswith('_err') and param_name in c:
                         err_col = c; break
             
             if err_col:
                 y_err = merged[err_col]
+                # Only plot error bars if not too cluttered?
                 ax.errorbar(x_vals, y_vals, yerr=y_err, fmt='o', alpha=0.6, label='Rec')
                 # Pull
                 pull = (y_vals - x_vals) / y_err
@@ -114,13 +161,25 @@ def validate_results(data_dir):
             else:
                 ax.plot(x_vals, y_vals, 'o', alpha=0.6, label='Rec')
                 
-            min_v = min(x_vals.min(), y_vals.min())
-            max_v = max(x_vals.max(), y_vals.max())
-            ax.plot([min_v, max_v], [min_v, max_v], 'k--', label='1:1')
+            ax.plot([final_min, final_max], [final_min, final_max], 'k--', label='1:1')
             ax.set_xlabel(f"True {param_name}")
             ax.set_ylabel(f"Rec {param_name}")
-            ax.set_title(f"Recovery: {param_name}")
+            ax.set_title(f"Rec: {param_name}")
+            
+            # Suptitle for subplot or Figure? User said "have suptitle that says...". 
+            # Usually suptitle is for Figure, but user said "In this code section... they have suptitle".
+            # Maybe they meant title (for the subplot) or suptitle for the whole figure.
+            # Given context "make the figure with 4 column subplots", "suptitle" usually means global title.
+            # But specific to "points out of xlim", this is per-parameter.
+            # I will add it to the Title of this subplot OR the Figure suptitle.
+            # Let's put it in the subplot title for clarity since we loop over parameters.
+            # "Recovery: {param} (N_out={n_out})"
+            
+            ax.set_title(f"Rec: {param_name}\n(Out of Range: {n_out})")
             ax.legend()
+            # ax.set_xlim(final_min, final_max)
+            ax.set_ylim(final_min, final_max)
+            
         else:
             ax.text(0.5, 0.5, "Param cols not found", ha='center')
 
@@ -128,12 +187,17 @@ def validate_results(data_dir):
         ax = axes[1]
         if col_true in merged.columns and col_rec in merged.columns:
             res = merged[col_rec] - merged[col_true]
+            # Use same mask if meaningful? 
+            # Or just plot all residuals? 
+            # Usually residuals for outliers are huge.
+            # Let's just plot all.
             ax.plot(merged[col_true], res, 'o', alpha=0.6)
             ax.axhline(0, color='k', linestyle='--')
             ax.set_xlabel(f"True {param_name}")
             ax.set_ylabel("Residual")
             ax.set_title("Residuals")
-
+            # ax.set_xlim(final_min, final_max)
+        
         # 3. Chi2 / Loss
         ax = axes[2]
         chi2_col = None
@@ -147,8 +211,67 @@ def validate_results(data_dir):
             ax.set_ylabel(chi2_col)
             ax.set_title("Goodness of Fit (final reduced chi^2)")
             ax.set_yscale('log')
+            ax.set_ylim(0.5, 2)
+
+        if col_true in ['amplitude_true', 'background_true']:
+            axes[0].set_xscale('log')
+            axes[1].set_xscale('log')    
+            axes[2].set_xscale('log')
+        
+        # 4. Outlier Details
+        ax = axes[3]
+        ax.set_axis_off()
+        ax.set_title(f"Outliers (> {n_out})")
+        if n_out > 0:
+            # Find filename column
+            fname_col = None
+            for c in merged.columns:
+                if 'filename' in c and 'sci' in c: fname_col = c; break
+            if not fname_col:
+                 for c in merged.columns:
+                    if 'filename' in c: fname_col = c; break
             
-        plt.tight_layout()
+            cols_to_show = ['seqid', col_true, col_rec]
+            if chi2_col: cols_to_show.append(chi2_col)
+            if fname_col: cols_to_show.append(fname_col)
+            
+            # Create a textual representation of outliers
+            # Limit to top 20 to avoid overcrowding
+            out_info = outliers[cols_to_show].copy()
+            
+            # Format nicely
+            out_info[col_true] = out_info[col_true].map(lambda x: f"{x:.4g}")
+            out_info[col_rec] = out_info[col_rec].map(lambda x: f"{x:.4g}")
+            if chi2_col:
+                out_info[chi2_col] = out_info[chi2_col].map(lambda x: f"{x:.4g}")
+            
+            # Header
+            header = "seqid | True | Rec"
+            if chi2_col: header += " | Chi2"
+            if fname_col: header += " | File"
+            
+            text_str = header + "\n" + "-"*len(header) + "\n"
+            
+            rows = []
+            for idx, row in out_info.head(30).iterrows():
+                r_str = f"{row['seqid']} | {row[col_true]} | {row[col_rec]}"
+                if chi2_col: r_str += f" | {row[chi2_col]}"
+                if fname_col: 
+                    # Shorten filename?
+                    f_short = os.path.basename(str(row[fname_col]))
+                    r_str += f" | {f_short}"
+                rows.append(r_str)
+            
+            text_str += "\n".join(rows)
+            if n_out > 30:
+                text_str += f"\n... (+{n_out-30} more)"
+            
+            ax.text(0.0, 1.0, text_str, va='top', ha='left', family='monospace', fontsize=8, transform=ax.transAxes)
+        else:
+            ax.text(0.5, 0.5, "No points out of range.", ha='center', va='center')
+
+        plt.suptitle(f"Validation: {param_name} (Total: {len(merged)}, Out: {n_out})", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust for suptitle
         plt.savefig(os.path.join(PLOT_DIR, f"validate_{param_name}.pdf"))
         plt.close()
         
@@ -161,8 +284,11 @@ def validate_results(data_dir):
         
         if available_mps and col_true in merged.columns:
             # Use the VARIED parameter as x-axis (not always R_sersic!)
-            fig2, axes2 = plt.subplots(1, 2, figsize=(12, 5))
+            fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
             
+            axes2[0].axhline(np.pi/6, color='gray', linestyle='--', label='$\pi/6$')            
+            axes2[0].axhline(np.pi/8, color='k', linestyle='--', label='$\pi/8$')
+
             x_varied = merged[col_true]
             xlab = f'True {param_name}'
                 
@@ -171,15 +297,20 @@ def validate_results(data_dir):
             for mp in available_mps:
                 err_c = f"{mp}_err"
                 if err_c in merged.columns:
-                    ax.loglog(x_varied, merged[err_c], 'o', label=mp, alpha=0.5)
-            
+                    ax.plot(x_varied, merged[err_c], 'o', label=mp, alpha=0.5)
+            min_multipole_uncertainty_lim = 1e-3
+            max_multipole_uncertainty_lim = np.pi
             ax.set_xlabel(xlab)
             ax.set_ylabel("Uncertainty (1 sigma)")
             ax.set_title(f"Multipole Uncertainty vs {param_name}")
             ax.legend()
-            
+            ax.set_ylim(min_multipole_uncertainty_lim, max_multipole_uncertainty_lim) # if phi_m3 or phi_m4 is over np.pi, it's too big of uncertainty. a_m3 a_m4 must be <<1 too, so np.pi is a safe upper bound.
+            ax.set_yscale('log')
+
             # Plot 2: Chi2 vs Varied Parameter
             ax = axes2[1]
+            min_chi2_lim = 0.5
+            max_chi2_lim = 3.0
             if chi2_col:
                 ax.axhline(1.0, color='k', linestyle=':', label='reduced chi^2 =1')
                 ax.axhline(2.0, color='k', linestyle='--', label='reduced chi^2 =2')
@@ -188,7 +319,74 @@ def validate_results(data_dir):
                 ax.set_ylabel("Reduced Chi^2")
                 ax.set_title(f"Fit Quality vs {param_name}")
                 ax.set_yscale('log')
+                ax.set_ylim(min_chi2_lim, max_chi2_lim) # if reduced chi^2 is over 3, it's too big of a reduced chi^2.
                 ax.legend()
+            
+            if 'amplitude' in col_true:
+                print(col_true)
+                print('debug')
+
+            if col_true in ['amplitude_true', 'background_true']:
+                axes2[0].set_xscale('log')
+                axes2[1].set_xscale('log')
+
+            # Plot 3: Outliers details
+            ax = axes2[2]
+            ax.set_axis_off()
+            
+            # Identify outliers for Multipoles
+            # Criteria: Unc > max_multipole_uncertainty_lim (pi) OR Chi2 > max_chi2_lim (3) OR Chi2 < min_chi2_lim (0.5)
+            bad_chi2_upper = merged[chi2_col] > max_chi2_lim if chi2_col else pd.Series([False]*len(merged))
+            bad_chi2_lower = merged[chi2_col] < min_chi2_lim if chi2_col else pd.Series([False]*len(merged))
+            bad_unc = pd.Series([False]*len(merged))
+            
+            # Also want to know WHICH param failed for the report
+            # Also want to know WHICH param failed for the report
+            # Ensure bad_params is object type (string)
+            merged['bad_params'] = ''
+            merged['bad_params'] = merged['bad_params'].astype(object)
+            
+            for mp in available_mps:
+                err_c = f"{mp}_err"
+                if err_c in merged.columns:
+                    is_bad = (merged[err_c] > max_multipole_uncertainty_lim) | (merged[err_c] < min_multipole_uncertainty_lim)
+                    bad_unc = bad_unc | is_bad
+                    if is_bad.any():
+                        # Append bad param name safely
+                        to_append = f"{mp}_err=" + merged.loc[is_bad, err_c].apply(lambda x: f"{x:.2g}") + "; "
+                        merged.loc[is_bad, 'bad_params'] = merged.loc[is_bad, 'bad_params'] + to_append
+            
+            if chi2_col:
+                is_bad_chi2_upper = merged[chi2_col] > max_chi2_lim
+                is_bad_chi2_lower = merged[chi2_col] < min_chi2_lim
+                if is_bad_chi2_upper.any():
+                    to_append = f"Chi2=" + merged.loc[is_bad_chi2_upper, chi2_col].apply(lambda x: f"{x:.2g}") + "; "
+                    merged.loc[is_bad_chi2_upper, 'bad_params'] = merged.loc[is_bad_chi2_upper, 'bad_params'] + to_append
+                if is_bad_chi2_lower.any():
+                    to_append = f"Chi2=" + merged.loc[is_bad_chi2_lower, chi2_col].apply(lambda x: f"{x:.2g}") + "; "
+                    merged.loc[is_bad_chi2_lower, 'bad_params'] = merged.loc[is_bad_chi2_lower, 'bad_params'] + to_append
+            
+            mask_mp_out = bad_chi2_upper | bad_chi2_lower | bad_unc
+            n_mp_out = mask_mp_out.sum()
+            
+            ax.set_title(f"Outliers (out of plotting range): {n_mp_out}")
+            
+            if n_mp_out > 0:
+                mp_outliers = merged[mask_mp_out]
+                
+                # Report columns: seqid, bad_params
+                text_str = "seqid | Issues\n" + "-"*30 + "\n"
+                rows = []
+                for idx, row in mp_outliers.head(30).iterrows():
+                    rows.append(f"{row['seqid']} | {row['bad_params']}")
+                
+                text_str += "\n".join(rows)
+                if n_mp_out > 30:
+                    text_str += f"\n... (+{n_mp_out-30} more)"
+                
+                ax.text(0.0, 1.0, text_str, va='top', ha='left', family='monospace', fontsize=8, transform=ax.transAxes)
+            else:
+                 ax.text(0.5, 0.5, "No outliers found.", ha='center', va='center')
                     
             plt.tight_layout()
             plt.savefig(os.path.join(PLOT_DIR, f"multipoles_reliability_{param_name}.pdf"))

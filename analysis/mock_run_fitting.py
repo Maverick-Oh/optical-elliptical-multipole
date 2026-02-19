@@ -5,6 +5,7 @@ import pandas as pd
 from astropy.io import fits
 import warnings
 import time
+import matplotlib.pyplot as plt
 
 # Import shared tools
 from tools_fitting import process_one_target_optimize, unpack_params
@@ -98,188 +99,196 @@ def preprocess_directory(d):
         
         if not os.path.exists(f_wht): continue
 
-        try:
-            # Load Data
-            # Fix: load_fits with return_center=True requires center_radec, which we don't have for mocks.
-            # Fix: load_fits with return_orientat=True fails if ORIENTAT missing (mocks).
-            sci, wht = load_fits(f_sci, f_wht, return_orientat=False, return_center=False)
-            if debug_plots:
-                fig, ax = plt.subplots(1,2, figsize=(10, 5))
-                # Compute sigma map for comparison
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    sigma_map = np.sqrt(1/wht)
-                
-                # Plot SCI with Asinh and return norm
-                h0 = AsinhStretchPlot(ax[0], sci, origin='lower')
-                ax[0].set_title(f"SCI-{base}"); ax[0].axis('off'); plt.colorbar(h0, ax=ax[0], fraction=0.046, pad=0.04)
-                
-                # Plot SIGMA
-                h1 = ax[1].imshow(sigma_map, origin='lower')
-                ax[1].set_title(f"SIGMA-{base}"); ax[1].axis('off'); plt.colorbar(h1, ax=ax[1], fraction=0.046, pad=0.04)
-                
-                plt.show()
-            orientat = 0.0
-            center_xy = (sci.shape[1]/2.0, sci.shape[0]/2.0)
+        # try:
+        # Load Data
+        # Fix: load_fits with return_center=True requires center_radec, which we don't have for mocks.
+        # Fix: load_fits with return_orientat=True fails if ORIENTAT missing (mocks).
+        sci, wht = load_fits(f_sci, f_wht, return_orientat=False, return_center=False)
+        if debug_plots:
+            fig, ax = plt.subplots(1,2, figsize=(10, 5))
+            # Compute sigma map for comparison
+            with np.errstate(divide='ignore', invalid='ignore'):
+                sigma_map = np.sqrt(1/wht)
             
-            # Read header for R_sersic (to set auto_r50)
-            with fits.open(f_sci) as hdu:
-                hdr = hdu[0].header
-                r_sersic = hdr.get('R_sersic', 0.4) # Default 0.4 if missing
-                pixscale = hdr.get('PIXSCALE', 0.03)
-                
-            # SEP Configuration
-            # Detect
-            sep_config = {# SEP detection/deblend parameters
-                'deblend_nthresh': 32, # DEBLEND_NTHRESH : the number of thresholds the intensity range is devided up in. 32 is the most common number.
-                'deblend_cont': 1e-4, # Minimum contrast ratio used for object deblending. Default is 0.005. To entirely disable deblending, set to 1.0.
-                'detect_thresh_sigma': 3.0, # 3.0  # Check: https://sep.readthedocs.io/en/stable/api/sep.extract.html; when err
-                # map is given, the interpretation changes so it needs to be updated.
-                'minarea': 10,  #20 # minimum area; default 5 pixels
-                }
-            objs, segmap = extract_with_sep(sci, wht, **sep_config, return_segmap=True)
-            if debug_plots:
-                fig, ax = plt.subplots(1,2, figsize=(10, 5))
-                h0 = AsinhStretchPlot(ax[0], sci, origin='lower')
-                ax[0].set_title(f"SCI-{base}"); ax[0].axis('off'); plt.colorbar(h0, ax=ax[0], fraction=0.046, pad=0.04)
-                h1 = ax[1].imshow(segmap, origin='lower')
-                ax[1].set_title(f"SEGMAP-{base}"); ax[1].axis('off'); plt.colorbar(h1, ax=ax[1], fraction=0.046, pad=0.04)
-                plt.show()
-            # Identify Target (Assume center)
-            # Center of image
-            h, w = sci.shape
-            target_xy = (w/2.0, h/2.0)
+            # Plot SCI with Asinh and return norm
+            h0 = AsinhStretchPlot(ax[0], sci, origin='lower')
+            ax[0].set_title(f"SCI-{base}"); ax[0].axis('off'); plt.colorbar(h0, ax=ax[0], fraction=0.046, pad=0.04)
             
-            label, rec, dist = pick_target_label(objs, segmap, target_xy, verbose=False)
-            if debug_plots:
-                print(f"Label: {label}, Rec: {rec}, Dist: {dist}")
-            # Crop
-            # Use crop_target which returns many maps
-            # We need: sci_bgsub_crop, wht_crop, segmap_crop, mask_crop
-            # Wait, crop_target expects a list of maps.
-            # And it returns row (dict) and cropped_data (dict)
+            # Plot SIGMA
+            h1 = ax[1].imshow(sigma_map, origin='lower')
+            ax[1].set_title(f"SIGMA-{base}"); ax[1].axis('off'); plt.colorbar(h1, ax=ax[1], fraction=0.046, pad=0.04)
             
-            # We need to prepare inputs for crop_target
-            # It expects [sci_bgsub, wht, rms, segmap, mask] usually?
-            # Let's see how process_cutout does it:
-            # mask = (segmap != label) * (segmap != 0) + mask_invalid_values
-            # params: crop_mode='minmax', crop_factor=1.5
+            plt.show()
+        orientat = 0.0
+        center_xy = (sci.shape[1]/2.0, sci.shape[0]/2.0)
+        
+        # Read header for R_sersic (to set auto_r50)
+        with fits.open(f_sci) as hdu:
+            hdr = hdu[0].header
+            r_sersic = hdr.get('R_sersic', 0.4) # Default 0.4 if missing
+            pixscale = hdr.get('PIXSCALE', 0.03)
             
-            # Simple background subtraction for cropping? 
-            # We can use simple sigma clip for now as in process_cutout
-            from astropy.stats import sigma_clipped_stats
-            mean, median, std = sigma_clipped_stats(sci, sigma=3.0)
-            sci_bgsub = sci - median
-            
-            # Mask
-            mask_invalid = (sci==0) | (wht==0)
-            mask_others = (segmap != label) & (segmap != 0)
-            mask_comb = mask_invalid | mask_others
-            
-            # We pass [sci_bgsub, wht, segmap, mask_comb]
-            # crop_target returns cropped versions
-            
-            title_list = ['SCI', 'WHT', 'SEGMAP', 'MASK']
-            map_list = [sci_bgsub, wht, segmap, mask_comb]
-            
-            plot_02_out = os.path.join(d, f"{base}-02-bg_and_segmap.pdf")
-            print(f"  Attempting to save 02 plot to: {plot_02_out}")
-            if os.path.exists(plot_02_out):
-                print(f"  SUCCESS: 02 plot already exists.")
-            else:
-                try:
-                    plot_sep_steps(
-                        sci, sci_bgsub, wht, segmap, target_label=label, target_xy=target_xy,
-                        extent=None, # Pixel coords
-                        filename_sci=f"{base}-SCI.fits",
-                        out_path=plot_02_out,
-                    )
-                    if os.path.exists(plot_02_out):
-                        print(f"  SUCCESS: 02 plot created.")
-                    else:
-                        print(f"  FAILURE: 02 plot NOT created despite no exception.")
-                except Exception as e:
-                    print(f"  Warning: Failed to create 02-bg_and_segmap: {e}")
+        # SEP Configuration
+        # Detect
+        sep_config = {# SEP detection/deblend parameters
+            'deblend_nthresh': 32, # DEBLEND_NTHRESH : the number of thresholds the intensity range is devided up in. 32 is the most common number.
+            'deblend_cont': 1e-4, # Minimum contrast ratio used for object deblending. Default is 0.005. To entirely disable deblending, set to 1.0.
+            'detect_thresh_sigma': 3.0, # 3.0  # Check: https://sep.readthedocs.io/en/stable/api/sep.extract.html; when err
+            # map is given, the interpretation changes so it needs to be updated.
+            'minarea': 10,  #20 # minimum area; default 5 pixels
+            }
+        objs, segmap = extract_with_sep(sci, wht, **sep_config, return_segmap=True)
+        if debug_plots:
+            fig, ax = plt.subplots(1,2, figsize=(10, 5))
+            h0 = AsinhStretchPlot(ax[0], sci, origin='lower')
+            ax[0].set_title(f"SCI-{base}"); ax[0].axis('off'); plt.colorbar(h0, ax=ax[0], fraction=0.046, pad=0.04)
+            h1 = ax[1].imshow(segmap, origin='lower')
+            ax[1].set_title(f"SEGMAP-{base}"); ax[1].axis('off'); plt.colorbar(h1, ax=ax[1], fraction=0.046, pad=0.04)
+            plt.show()
+        # Identify Target (Assume center)
+        # Center of image
+        h, w = sci.shape
+        target_xy = (w/2.0, h/2.0)
 
-            # Temporarily suppress print/plot
-            # We define a helper to just do the crop logic or call crop_target interactively?
-            # user `preprocess_COSMOS...` calls crop_target.
-            # Let's call it.
-            
-            # We need summary stats dict
-            sc_vals = {'mean': mean, 'median': median, 'stdev': std}
-            
-            # Redundant crop_target call removed.
-            # We perform cropping in the robust block below.
-            
-            # Save to HDF5
-            # keys returned: sci_bgsub_crop, wht_crop, ... (based on title list?)
-            # Actually crop_target returns list of cropped maps matching input list.
-            # Wait, looking at tools_source_extractor.py:
-            # It returns (row, cropped_data) dictionary IF called from process_cutout logic?
-            # No, crop_target in tools_source_extractor returns (map_list_cropped, obj_rec_for_cropped)
-            
-            # map_list_cropped, rec_cropped = crop_target(...) replaced by robust logic below:
+        fig, ax = plt.subplots(1,2, figsize=(10, 5))
+        h0 = ax[0].imshow(sci ,origin='lower')
+        ax[0].set_title(f"SCI-{base}"); ax[0].axis('off'); plt.colorbar(h0, ax=ax[0], fraction=0.046, pad=0.04)
+        h2 = ax[1].imshow(wht, origin='lower')
+        ax[1].set_title(f"WHT-{base}"); ax[1].axis('off'); plt.colorbar(h2, ax=ax[1], fraction=0.046, pad=0.04)
+        fig.savefig(os.path.join(d, f"{base}-01-sci_wht.pdf"))
+        plt.close()
 
-            # Preprocessing Logic Wrapper
+        label, rec, dist = pick_target_label(objs, segmap, target_xy, verbose=False)
+        if debug_plots:
+            print(f"Label: {label}, Rec: {rec}, Dist: {dist}")
+        # Crop
+        # Use crop_target which returns many maps
+        # We need: sci_bgsub_crop, wht_crop, segmap_crop, mask_crop
+        # Wait, crop_target expects a list of maps.
+        # And it returns row (dict) and cropped_data (dict)
+        
+        # We need to prepare inputs for crop_target
+        # It expects [sci_bgsub, wht, rms, segmap, mask] usually?
+        # Let's see how process_cutout does it:
+        # mask = (segmap != label) * (segmap != 0) + mask_invalid_values
+        # params: crop_mode='minmax', crop_factor=1.5
+        
+        # Simple background subtraction for cropping? 
+        # We can use simple sigma clip for now as in process_cutout
+        from astropy.stats import sigma_clipped_stats
+        mean, median, std = sigma_clipped_stats(sci, sigma=3.0)
+        sci_bgsub = sci - median
+        
+        # Mask
+        mask_invalid = (sci==0) | (wht==0)
+        mask_others = (segmap != label) & (segmap != 0)
+        mask_comb = mask_invalid | mask_others
+        
+        # We pass [sci_bgsub, wht, segmap, mask_comb]
+        # crop_target returns cropped versions
+        
+        title_list = ['SCI', 'WHT', 'SEGMAP', 'MASK']
+        map_list = [sci_bgsub, wht, segmap, mask_comb]
+        
+        plot_02_out = os.path.join(d, f"{base}-02-bg_and_segmap.pdf")
+        print(f"  Attempting to save 02 plot to: {plot_02_out}")
+        if os.path.exists(plot_02_out):
+            print(f"  SUCCESS: 02 plot already exists.")
+        else:
             try:
-                # Attempt Preprocessing
-                crop_res = None
-                try:
-                    crop_res = crop_target(
-                        map_list, label, rec, verbose=False, plot=False,
-                        fig_savename=None, title_list=title_list, 
-                        sigma_clipped_values=sc_vals,
-                        crop_mode='minmax', crop_factor=1.0,
-                        pixscale_arcsec=pixscale
-                    )
-                    if debug_plots:
-                        map_list_cropped, obj_rec_for_cropped = crop_res
-                        fig, axes = plt.subplots(1,4, figsize=(10, 5))
-                        h0 = AsinhStretchPlot(axes[0], map_list_cropped[0])
-                        axes[0].set_title(f"SCI-{base}"); axes[0].axis('off'); plt.colorbar(h0, ax=axes[0], fraction=0.046, pad=0.04)
-                        h1 = axes[1].imshow(map_list_cropped[1], origin='lower')
-                        axes[1].set_title(f"WHT-{base}"); axes[1].axis('off'); plt.colorbar(h1, ax=axes[1], fraction=0.046, pad=0.04)
-                        h2 = axes[2].imshow(map_list_cropped[2], origin='lower')
-                        axes[2].set_title(f"SEGMAP-{base}"); axes[2].axis('off'); plt.colorbar(h2, ax=axes[2], fraction=0.046, pad=0.04)
-                        h3 = axes[3].imshow(map_list_cropped[3], origin='lower')
-                        axes[3].set_title(f"MASK-{base}"); axes[3].axis('off'); plt.colorbar(h3, ax=axes[3], fraction=0.046, pad=0.04)
-                        plt.show()
-                except Exception as e_inner:
-                    # print(f"  Preprocessing internal call failed: {e_inner}")
-                    pass
-
-                if crop_res is not None:
-                     map_list_cropped, rec_cropped = crop_res
+                plot_sep_steps(
+                    sci, sci_bgsub, wht, segmap, target_label=label, target_xy=target_xy,
+                    extent=None, # Pixel coords
+                    filename_sci=f"{base}-SCI.fits",
+                    out_path=plot_02_out,
+                )
+                if os.path.exists(plot_02_out):
+                    print(f"  SUCCESS: 02 plot created.")
                 else:
-                     raise ValueError("Preprocessing result is None")
+                    print(f"  FAILURE: 02 plot NOT created despite no exception.")
+            except Exception as e:
+                print(f"  Warning: Failed to create 02-bg_and_segmap: {e}")
 
-            except Exception:
-                # Fallback to full frame
-                map_list_cropped = map_list
-            
-            # Extract
-            sci_crop = map_list_cropped[0]
-            wht_crop = map_list_cropped[1]
-            seg_crop = map_list_cropped[2]
-            msk_crop = map_list_cropped[3]
-            
-            # Save HDF5 (Required)
-            with h5py.File(hdf5_fn, "w") as f:
-                f.create_dataset("sci_bgsub_crop", data=sci_crop.filled(0) if hasattr(sci_crop, 'filled') else sci_crop)
-                f.create_dataset("wht_crop", data=wht_crop.filled(0) if hasattr(wht_crop, 'filled') else wht_crop)
-                f.create_dataset("mask_crop", data=msk_crop.filled(0) if hasattr(msk_crop, 'filled') else msk_crop)
-                f.create_dataset("segmap_crop", data=seg_crop.filled(0) if hasattr(seg_crop, 'filled') else seg_crop) 
-        except Exception as e:
-            print(f"  Preprocessing/HDF5 setup CRITICAL FAIL for {base}: {e}")
-            import traceback
-            traceback.print_exc()
-            pass
+        # Temporarily suppress print/plot
+        # We define a helper to just do the crop logic or call crop_target interactively?
+        # user `preprocess_COSMOS...` calls crop_target.
+        # Let's call it.
+        
+        # We need summary stats dict
+        sc_vals = {'mean': mean, 'median': median, 'stdev': std}
+        
+        # Redundant crop_target call removed.
+        # We perform cropping in the robust block below.
+        
+        # Save to HDF5
+        # keys returned: sci_bgsub_crop, wht_crop, ... (based on title list?)
+        # Actually crop_target returns list of cropped maps matching input list.
+        # Wait, looking at tools_source_extractor.py:
+        # It returns (row, cropped_data) dictionary IF called from process_cutout logic?
+        # No, crop_target in tools_source_extractor returns (map_list_cropped, obj_rec_for_cropped)
+        
+        # map_list_cropped, rec_cropped = crop_target(...) replaced by robust logic below:
+
+        # Preprocessing Logic Wrapper
+        try:
+            # Attempt Preprocessing
+            crop_res = None
+            try:
+                crop_res = crop_target(
+                    map_list, label, rec, verbose=False, plot=False,
+                    fig_savename=None, title_list=title_list, 
+                    sigma_clipped_values=sc_vals,
+                    crop_mode='minmax', crop_factor=1.0,
+                    pixscale_arcsec=pixscale
+                )
+                if debug_plots:
+                    map_list_cropped, obj_rec_for_cropped = crop_res
+                    fig, axes = plt.subplots(1,4, figsize=(10, 5))
+                    h0 = AsinhStretchPlot(axes[0], map_list_cropped[0])
+                    axes[0].set_title(f"SCI-{base}"); axes[0].axis('off'); plt.colorbar(h0, ax=axes[0], fraction=0.046, pad=0.04)
+                    h1 = axes[1].imshow(map_list_cropped[1], origin='lower')
+                    axes[1].set_title(f"WHT-{base}"); axes[1].axis('off'); plt.colorbar(h1, ax=axes[1], fraction=0.046, pad=0.04)
+                    h2 = axes[2].imshow(map_list_cropped[2], origin='lower')
+                    axes[2].set_title(f"SEGMAP-{base}"); axes[2].axis('off'); plt.colorbar(h2, ax=axes[2], fraction=0.046, pad=0.04)
+                    h3 = axes[3].imshow(map_list_cropped[3], origin='lower')
+                    axes[3].set_title(f"MASK-{base}"); axes[3].axis('off'); plt.colorbar(h3, ax=axes[3], fraction=0.046, pad=0.04)
+                    plt.show()
+            except Exception as e_inner:
+                # print(f"  Preprocessing internal call failed: {e_inner}")
+                pass
+
+            if crop_res is not None:
+                    map_list_cropped, rec_cropped = crop_res
+            else:
+                    raise ValueError("Preprocessing result is None")
+
+        except Exception:
+            # Fallback to full frame
+            map_list_cropped = map_list
+        
+        # Extract
+        sci_crop = map_list_cropped[0]
+        wht_crop = map_list_cropped[1]
+        seg_crop = map_list_cropped[2]
+        msk_crop = map_list_cropped[3]
+        
+        # Save HDF5 (Required)
+        with h5py.File(hdf5_fn, "w") as f:
+            f.create_dataset("sci_bgsub_crop", data=sci_crop.filled(0) if hasattr(sci_crop, 'filled') else sci_crop)
+            f.create_dataset("wht_crop", data=wht_crop.filled(0) if hasattr(wht_crop, 'filled') else wht_crop)
+            f.create_dataset("mask_crop", data=msk_crop.filled(0) if hasattr(msk_crop, 'filled') else msk_crop)
+            f.create_dataset("segmap_crop", data=seg_crop.filled(0) if hasattr(seg_crop, 'filled') else seg_crop) 
+        # except Exception as e:
+        #     print(f"  Preprocessing/HDF5 setup CRITICAL FAIL for {base}: {e}")
+        #     import traceback
+        #     traceback.print_exc()
+        #     pass
 
 def run_fitting():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pattern", 
     type=str, 
-    default='mock_varying_a_m3', # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
+    default='mock_varying_x0', # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
     help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
     parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
