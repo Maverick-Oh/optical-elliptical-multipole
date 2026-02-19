@@ -129,8 +129,8 @@ def validate_results(data_dir):
             
             # final_min = min(view_min, y_p01)
             # final_max = max(view_max, y_p99)
-            final_min = view_min
-            final_max = view_max
+            final_min = x_min if param_name in ['amplitude', 'background'] else view_min
+            final_max = x_max if param_name in ['amplitude', 'background'] else view_max
             
             # Check for outliers outside THIS range
             mask_out = (y_vals < final_min) | (y_vals > final_max)
@@ -160,7 +160,7 @@ def validate_results(data_dir):
                 merged['pull'] = pull
             else:
                 ax.plot(x_vals, y_vals, 'o', alpha=0.6, label='Rec')
-                
+            
             ax.plot([final_min, final_max], [final_min, final_max], 'k--', label='1:1')
             ax.set_xlabel(f"True {param_name}")
             ax.set_ylabel(f"Rec {param_name}")
@@ -179,7 +179,8 @@ def validate_results(data_dir):
             ax.legend()
             # ax.set_xlim(final_min, final_max)
             ax.set_ylim(final_min, final_max)
-            
+            if param_name in ['amplitude', 'background']:
+                print('debug')
         else:
             ax.text(0.5, 0.5, "Param cols not found", ha='center')
 
@@ -213,11 +214,75 @@ def validate_results(data_dir):
             ax.set_yscale('log')
             ax.set_ylim(0.5, 2)
 
-        if col_true in ['amplitude_true', 'background_true']:
-            axes[0].set_xscale('log')
-            axes[1].set_xscale('log')    
-            axes[2].set_xscale('log')
+        # Helper function to add vertical lines and seqid labels
+        def add_vlines_and_seqid(ax, x_data, y_data, seqids):
+            # We need to know the current y-limits to draw lines to the bottom
+            # But limits might change. Let's use a transform that mixes data (x) and axes (y) coordinates?
+            # Actually, easiest is to use axvline with ymax.
+            # However, axvline goes from 0 to 1 (axes fraction).
+            # We want it to go from 0 (bottom) to the data point y (in axes fraction).
+            # The data point y might be outside [0,1].
+            
+            # Let's use plot with a transform for the x-axis and data for y-axis? No, that's complex.
+            # Let's just use data coordinates for both, but use the current bottom limit.
+            # BETTER: transform=ax.get_xaxis_transform() makes y=0 the bottom of the axis?
+            # No, xaxis_transform makes y in axes coords (0=bottom, 1=top). X is data coords.
+            # PERFECT!
+            # So we plot from (x, 0) to (x, y_data_transformed_to_axes_fraction).
+            # But y_data is in data coords.
+            # So we can't easily use mixed transform for the line *height* based on data value.
+            
+            # Alternative: iterate and draw line from (x, y_data) to (x, y_bottom_limit).
+            # We can get y_bottom from ax.get_ylim()[0].
+            # But we must ensure limits are finalized? Or just use a very small number if log/linear?
+            # Let's use the transform trick for the TEXT (labels) because they stay at the bottom.
+            # For the lines, let's use vlines and rely on data coordinates.
+            
+            # Wait, if we use vlines, we need a 'ymin'.
+            # If we assume the plot limits are set or will be set to include (most of) the data,
+            # we can use the data min or current limit.
+            # Let's wait until limits are set to draw lines? 
+            # Or just draw them with a very low ymin (e.g. -1e99 for linear, 1e-99 for log) and clip_on=True?
+            # User said "come down to the x-axis".
+            # If we use transformed y (0), we get the axis line.
+            # So we want a line from (x, y_data) to (x, y_axis_bottom).
+            
+            # Simple approach:
+            # For each point:
+            #   ax.plot([x, x], [y, y_axis_btm], ...)
+            # We need y_axis_btm properly.
+            
+            ymin, ymax = ax.get_ylim()
+            
+            # For text:
+            trans = ax.get_xaxis_transform() # x in data, y in axes fraction
+            
+            for x, y, sid in zip(x_data, y_data, seqids):
+                # Draw vertical line
+                # We can't use xaxis_transform for the whole line because the top point (y) is data-dependent.
+                # So we use data coords for the line.
+                # Use current ymin as the floor.
+                ax.vlines(x, ymin, y, colors='gray', linestyles=':', alpha=0.5, linewidth=0.8, clip_on=False)
+                
+                # Add seqid text
+                # y=-0.02 in axes coords puts it just below x-axis
+                ax.text(x, -0.02, f"({sid})", transform=trans, 
+                        ha='center', va='top', fontsize=6, color='gray', rotation=90, clip_on=False)
+
+        # Apply to General Plots
+        # axes[0]: Rec
+        # limits are set (final_min, final_max)
+        add_vlines_and_seqid(axes[0], merged[col_true], merged[col_rec], merged['seqid'])
         
+        # axes[1]: Residuals
+        # limits are auto (except xlim which is set to final_min, max)
+        add_vlines_and_seqid(axes[1], merged[col_true], merged[col_rec]-merged[col_true], merged['seqid'])
+        
+        # axes[2]: Chi2
+        # limits set (0.5, 2)
+        if chi2_col:
+            add_vlines_and_seqid(axes[2], merged.get(col_true, np.arange(len(merged))), merged[chi2_col], merged['seqid'])
+
         # 4. Outlier Details
         ax = axes[3]
         ax.set_axis_off()
@@ -270,6 +335,14 @@ def validate_results(data_dir):
         else:
             ax.text(0.5, 0.5, "No points out of range.", ha='center', va='center')
 
+        # 5. Set log scale for amplitude and background
+        if col_true in ['amplitude_true', 'background_true']:
+            axes[0].set_xscale('log')
+            axes[0].set_yscale('log')
+            axes[1].set_xscale('log')    
+            axes[2].set_xscale('log')
+            print('debug')
+            
         plt.suptitle(f"Validation: {param_name} (Total: {len(merged)}, Out: {n_out})", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust for suptitle
         plt.savefig(os.path.join(PLOT_DIR, f"validate_{param_name}.pdf"))
@@ -279,26 +352,62 @@ def validate_results(data_dir):
         # Plot multipole uncertainties vs the varied parameter
         
         # Identify Multipole Params available
-        mps = ['a_m3', 'phi_m3', 'a_m4', 'phi_m4']
+        mps = ['a_m3', 'a_m4', 'phi_m3', 'phi_m4']
         available_mps = [m for m in mps if f"{m}_rec" in merged.columns or f"{m}" in merged.columns] 
+        # available_mps.sort() # such that it is in the order of a_m3, a_m4, phi_m3, and phi_m4
         
         if available_mps and col_true in merged.columns:
             # Use the VARIED parameter as x-axis (not always R_sersic!)
             fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
             
-            axes2[0].axhline(np.pi/6, color='gray', linestyle='--', label='$\pi/6$')            
-            axes2[0].axhline(np.pi/8, color='k', linestyle='--', label='$\pi/8$')
+            axes2[0].axhline(np.pi/6, color='lightgreen', linestyle='--', alpha=0.5, label='$\pi/6$')            
+            axes2[0].axhline(np.pi/8, color='darkgreen', linestyle='--', alpha=0.5, label='$\pi/8$')
+            axes2[0].axhline(0.005, color='blue', linestyle='-', alpha=0.5, label='0.005')
 
             x_varied = merged[col_true]
             xlab = f'True {param_name}'
                 
             # Plot 1: Sigma(multipoles) vs Varied Parameter
             ax = axes2[0]
+            
+            # Custom markers
+            # a_m3: light blue triangle_up
+            # a_m4: dark blue square
+            # phi_m3: light green triangle_up
+            # phi_m4: dark green square
+            
+            styles = {
+                'a_m3': {'fmt': '^', 'color': 'lightblue', 'size': 10},
+                'a_m4': {'fmt': 's', 'color': 'darkblue', 'size': 5},
+                'phi_m3': {'fmt': '^', 'color': 'lightgreen', 'size': 10},
+                'phi_m4': {'fmt': 's', 'color': 'darkgreen', 'size': 5}
+            }
+            
             for mp in available_mps:
                 err_c = f"{mp}_err"
                 if err_c in merged.columns:
-                    ax.plot(x_varied, merged[err_c], 'o', label=mp, alpha=0.5)
-            min_multipole_uncertainty_lim = 1e-3
+                    s = styles.get(mp, {'fmt': 'o', 'color': 'k'}) # fallback
+                    ax.plot(x_varied, merged[err_c], marker=s['fmt'], color=s['color'], linestyle='', label=mp, alpha=0.8, markersize=s['size'])
+                    
+                    # Add vlines/seqid for this series? 
+                    # If we have multiple series on one plot, it might get cluttered if we draw line for EACH one.
+                    # But x is same for all (x_varied). y differs.
+                    # Let's draw lines for one of them or better yet, iterate unique x and draw common lines?
+                    # The request says "For each point that got plotted... add a vertical gray line".
+                    # Since they share x, one vertical line per x is enough visually.
+                    # But seqid labeling is per object.
+                    # Let's just do it once per object using the x-value.
+                    
+            # Add vlines/seqid (once per object)
+            # Use 'a_m3' or first available as "y" reference? 
+            # Actually, line should go from data point DOWN.
+            # If we have multiple points at same X (different params), we have multiple lines from different Ys?
+            # Or just one line from the Lowest/Highest Y?
+            # User expectation: "start from the data point".
+            # If we have 4 data points per X (4 params), we get 4 lines overlapping. That's fine.
+            # Visually it looks like lines from each marker down.
+
+            min_multipole_uncertainty_lim = 1e-4
             max_multipole_uncertainty_lim = np.pi
             ax.set_xlabel(xlab)
             ax.set_ylabel("Uncertainty (1 sigma)")
@@ -306,6 +415,10 @@ def validate_results(data_dir):
             ax.legend()
             ax.set_ylim(min_multipole_uncertainty_lim, max_multipole_uncertainty_lim) # if phi_m3 or phi_m4 is over np.pi, it's too big of uncertainty. a_m3 a_m4 must be <<1 too, so np.pi is a safe upper bound.
             ax.set_yscale('log')
+            for mp in available_mps:
+                err_c = f"{mp}_err"
+                if err_c in merged.columns:
+                    add_vlines_and_seqid(ax, x_varied, merged[err_c], merged['seqid'])
 
             # Plot 2: Chi2 vs Varied Parameter
             ax = axes2[1]
@@ -321,6 +434,9 @@ def validate_results(data_dir):
                 ax.set_yscale('log')
                 ax.set_ylim(min_chi2_lim, max_chi2_lim) # if reduced chi^2 is over 3, it's too big of a reduced chi^2.
                 ax.legend()
+                
+                # Add vlines/seqid
+                add_vlines_and_seqid(ax, x_varied, merged[chi2_col], merged['seqid'])
             
             if 'amplitude' in col_true:
                 print(col_true)
@@ -391,7 +507,7 @@ def validate_results(data_dir):
             plt.tight_layout()
             plt.savefig(os.path.join(PLOT_DIR, f"multipoles_reliability_{param_name}.pdf"))
             plt.close()
-
+        
         # Summary Metrics
         summary = {
             'param': param_name,
@@ -413,7 +529,7 @@ if __name__ == "__main__":
     # usage example:
     # python mock_validate.py --data-dir ../data/mock_test
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test", help="Directory containing mock_varying_* folders")
+    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_stronger_a_m", help="Directory containing mock_varying_* folders")
     args = parser.parse_args()
     
     if os.path.exists(args.data_dir):

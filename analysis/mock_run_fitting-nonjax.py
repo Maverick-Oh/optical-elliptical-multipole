@@ -288,11 +288,11 @@ def run_fitting():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pattern", 
     type=str, 
-    default='mock_varying_x0', # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
+    default=None, # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
     help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
     parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
-    parser.add_argument("--source-dir", type=str, default='../data/mock_test', help="Directory containing source mock_varying_* folders (default: data/)")
+    parser.add_argument("--source-dir", type=str, default='../data/mock_test_stronger_a_m', help="Directory containing source mock_varying_* folders (default: data/)")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory root (e.g. data/mock_fitting-0201-1)")
     parser.add_argument("--skip-fitting", action="store_true", help="Skip fitting")
     args = parser.parse_args()
