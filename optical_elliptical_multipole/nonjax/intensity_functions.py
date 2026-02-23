@@ -88,15 +88,41 @@ def sersic(R, amplitude=1.0, R_sersic=1.0, n_sersic=4.0):
 
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     print('debug of intensity_functions.py')
     range_arcsec = 2
-    ss_factor = 10 # supersample factor
+    ss_factor = 4 # supersample factor
     r = 0.03*np.arange(int(range_arcsec/0.03))
     r_ss = 0.03 / ss_factor * np.arange(int(range_arcsec/0.03*ss_factor))
     #
+    def mean_of_every_n(arr, n):
+        # Ensure the input is a numpy array
+        arr = np.array(arr)
+        
+        # Check if the array length is a multiple of n
+        if len(arr) % n != 0:
+            # Handle cases where the array length is not evenly divisible by n
+            print(f"Warning: Array length ({len(arr)}) is not a multiple of {n}. Truncating array.")
+        arr = arr[:len(arr) - (len(arr) % n)]
+
+        # Reshape the 1D array into a 2D array with n columns
+        # The -1 lets numpy automatically calculate the number of rows
+        reshaped_arr = arr.reshape(-1, n)
+        
+        # Calculate the mean across the second axis (axis=1, which corresponds to the columns)
+        # This computes the average of each row (each group of n elements)
+        means = np.mean(reshaped_arr, axis=1)
+        
+        return means
+    #
     y = sersic(r, amplitude=1.0, R_sersic=0.5, n_sersic=4.0)
     y_ss = sersic(r_ss, amplitude=1.0, R_sersic=0.5, n_sersic=4.0)
+    y_ss_mean = mean_of_every_n(y_ss, ss_factor)
+    y_lg = sersic(r, amplitude=1.0, R_sersic=2.0, n_sersic=4.0)
     #
-    plt.plot(r, y, 'k-')
-    plt.plot(r_ss, y_ss, 'r-')
+    plt.plot(r, y, 'k-', label='original')
+    plt.plot(r, y_ss_mean, 'r-', label='supersampled')
+    plt.plot(r, y_lg, 'g-', label='large R_sersic')
+    plt.legend()
     plt.show()
+    print('debug')

@@ -8,7 +8,7 @@ import time
 import matplotlib.pyplot as plt
 
 # Import shared tools
-from tools_fitting import process_one_target_optimize, unpack_params
+from tools_fitting import process_one_target_optimize, process_one_target_mcmc, unpack_params
 from optical_elliptical_multipole.plotting.plot_tools import AsinhStretchPlot, plot_masked_and_cropped, plot_sep_steps
 
 # Configuration
@@ -294,7 +294,13 @@ def run_fitting():
     parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
     parser.add_argument("--source-dir", type=str, default='../data/mock_test_stronger_a_m', help="Directory containing source mock_varying_* folders (default: data/)")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory root (e.g. data/mock_fitting-0201-1)")
-    parser.add_argument("--skip-fitting", action="store_true", help="Skip fitting")
+    parser.add_argument("--skip-fitting", action="store_true", help="Skip optimization fitting")
+    parser.add_argument("--skip-mcmc", action="store_true", help="Skip MCMC inference")
+    parser.add_argument("--mcmc-only", action="store_true", help="Run MCMC inference only (requires fitting results)")
+    parser.add_argument("--pso-only", action="store_true", help="Run *only* PSO (skip SLSQP, L-BFGS-B, trust-constr)")
+    parser.add_argument("--disable-pso", action="store_true", help="Disable PSO fallback on optimization failure")
+    parser.add_argument("--n-particles-factor", type=int, default=4, help="PSO particles = factor * n_params")
+    parser.add_argument("--pso-cores", type=int, default=1, help="Number of CPU cores for PSO (currently forced to 1 internally for safety but flag exists)")
     args = parser.parse_args()
 
     if args.out_dir is None:
@@ -370,15 +376,18 @@ def run_fitting():
         # 3. Fit
         # Check if results exist
         out_path = os.path.join(target_d, OUTPUT_FILENAME)
-        if os.path.exists(out_path) and args.skip_fitting:
-             print(f"  Result file exists. Skipping fitting.")
-             continue
-
-        # Load Truth to match seqid? Or just loop over FITS
-        fits_files = glob.glob(os.path.join(target_d, "*-SCI.fits"))
-        fits_files.sort()
+        out_path_mcmc = os.path.join(target_d, "fitting_results_mcmc.csv")
         
-        results = []
+        if os.path.exists(out_path) and (args.skip_fitting or args.mcmc_only):
+             print(f"  Result file exists. Skipping optimization fitting.")
+        elif not args.mcmc_only:
+            # Opt Loop
+
+            # Load Truth to match seqid? Or just loop over FITS
+            fits_files = glob.glob(os.path.join(target_d, "*-SCI.fits"))
+            fits_files.sort()
+            
+            results = []
         
         # Progress bar for individual fits within each directory
         for f_sci in tqdm(fits_files, desc=f"  Fitting {dir_name}", unit="fit", leave=False):
@@ -516,7 +525,7 @@ def run_fitting():
                     print(f"  Warning: Failed to create 03-masked_and_cropped: {e}")
                 
                 rec_fit = process_one_target_optimize(
-                    row_query=None, 
+                    row_query=row_query, 
                     data_dir=target_d, 
                     row_sep=row_sep, # Use the row_sep obtained from make_dummy_rows
                     sci=sci_crop, 
@@ -529,7 +538,10 @@ def run_fitting():
                     plot_final_contour=True, 
                     supersample_factor=args.supersample,
                     truth_row=row_truth,
-                    target_loss=1.1
+                    target_loss=0.0, # modified according to request to force PSO fallback when testing
+                    enable_PSO=not args.disable_pso,
+                    pso_only=args.pso_only,
+                    n_particles_factor=args.n_particles_factor
                 )
                 print(f"  Fit finished for {base}.")
 
@@ -555,6 +567,95 @@ def run_fitting():
                 print(f"  Failed to fit {base}: {e!r}")
                 import traceback
                 traceback.print_exc()
+
+        # 4. MCMC (Optional)
+        if not args.skip_mcmc:
+            if os.path.exists(out_path_mcmc) and args.skip_fitting:  
+                 print(f"  MCMC result file exists and --skip-fitting given. Skipping MCMC.")
+                 continue
+
+            if not os.path.exists(out_path):
+                print(f"  Cannot run MCMC: No optimization results ({out_path}) found.")
+                continue
+
+            print(f"  Running MCMC inference for {dir_name}...")
+            
+            try:
+                df_opt = pd.read_csv(out_path)
+            except Exception as e:
+                print(f"  Failed to load optimization results: {e}")
+                continue
+
+            results_mcmc = []
+            
+            # Sub-loop for individual MCMC processing
+            for f_sci in tqdm(fits_files, desc=f"  MCMC Inferring {dir_name}", unit="fit", leave=False):
+                base = os.path.basename(f_sci).replace("-SCI.fits", "")
+                
+                try:
+                    seqpixel = int(base)
+                except ValueError:
+                    print(f"  Warning: Cannot parse {base} to int. Skipping MCMC.")
+                    continue
+                
+                # Retrieve opt row
+                opt_row = df_opt[df_opt['id'] == seqpixel]
+                if opt_row.empty:
+                    opt_row = df_opt[df_opt['filename'] == base]
+                
+                if opt_row.empty:
+                    print(f"  No optimization result found for {base}. Skipping MCMC.")
+                    continue
+                opt_row_dict = opt_row.iloc[0].to_dict()
+                
+                row_query, row_sep = make_dummy_rows(hdr, base) # Uses HDR from last opt loop, fine since dummy
+                
+                # Truth Row
+                row_truth = truth_dict.get(seqpixel, None)
+
+                # Configure MCMC Params
+                mcmc_cfg = {
+                    "n_walkers": 8*len(m_list) + 40, # Example sizing based on params
+                    "n_steps": 2500,
+                    "burnin_fraction": 0.3,
+                    "init_scale": 1e-4,
+                    "random_seed": 42
+                }
+                
+                try:
+                    print(f"  Starting MCMC for {base}...")
+                    # ensure 'sequentialid' is populated for process_one_target_mcmc to read
+                    opt_row_dict['sequentialid'] = seqpixel
+                    
+                    rec_mcmc = process_one_target_mcmc(
+                        row_query=row_query,
+                        data_dir=target_d,
+                        row_sep=row_sep,
+                        opt_row=opt_row_dict,
+                        m=m_list,
+                        PIX_SCALE=0.03,
+                        mcmc_config=mcmc_cfg,
+                        debug=True
+                    )
+                    print(f"  MCMC finished for {base}.")
+                    
+                    # Store ID columns
+                    rec_mcmc['id'] = seqpixel
+                    rec_mcmc['filename'] = base
+                    
+                    results_mcmc.append(rec_mcmc)
+                    
+                    # Incremental Save for MCMC
+                    df_new_mcmc = pd.DataFrame([rec_mcmc])
+                    if os.path.exists(out_path_mcmc):
+                        df_new_mcmc.to_csv(out_path_mcmc, mode='a', header=False, index=False)
+                    else:
+                        df_new_mcmc.to_csv(out_path_mcmc, mode='w', header=True, index=False)
+                        
+                except Exception as e:
+                    print(f"  Failed MCMC on {base}: {e!r}")
+                    import traceback
+                    traceback.print_exc()
 
 if __name__ == "__main__":
     # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_phi_m3 &

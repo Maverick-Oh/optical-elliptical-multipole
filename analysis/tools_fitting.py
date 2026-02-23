@@ -350,10 +350,74 @@ def jacobian_error_estimate(v_best, residual_fn, bounds=None, rel_step=1e-6, abs
     return v_err
 
 
+def particle_swarm_optimization(loss_fn, bounds, n_particles, max_iter=200, w=0.5, c1=1.5, c2=1.5):
+    """
+    Lightweight numpy-based Particle Swarm Optimization.
+    """
+    lo, hi = bounds
+    dim = len(lo)
+
+    # Safe bounds for initialization to prevent OverflowError with np.inf
+    lo_safe = np.array([max(x, -1e4) if np.isfinite(x) else -1e4 for x in lo], dtype=np.float64)
+    hi_safe = np.array([min(x, 1e4) if np.isfinite(x) else 1e4 for x in hi], dtype=np.float64)
+
+    # Initialize particles
+    X = np.random.uniform(lo_safe, hi_safe, size=(n_particles, dim))
+    V = np.zeros_like(X)
+    
+    # Personal bests
+    P_best = X.copy()
+    P_best_loss = np.array([loss_fn(p) for p in P_best])
+
+    # Global best
+    g_best_idx = np.argmin(P_best_loss)
+    G_best = P_best[g_best_idx].copy()
+    G_best_loss = P_best_loss[g_best_idx]
+
+    # Dummy scipy minimize result class
+    class OptimizeResult:
+        pass
+    res = OptimizeResult()
+    res.x = G_best
+    res.fun = G_best_loss
+    res.success = True
+    
+    for it in range(max_iter):
+        r1 = np.random.rand(n_particles, dim)
+        r2 = np.random.rand(n_particles, dim)
+        
+        # Update velocities
+        V = w * V + c1 * r1 * (P_best - X) + c2 * r2 * (G_best - X)
+        
+        # Update positions
+        X = X + V
+        
+        # Apply bounds
+        X = np.clip(X, lo, hi)
+        
+        # Evaluate loss
+        # Doing this loop sequentially for single core safety as requested
+        current_loss = np.array([loss_fn(p) for p in X])
+        
+        # Update personal bests
+        improved = current_loss < P_best_loss
+        P_best[improved] = X[improved]
+        P_best_loss[improved] = current_loss[improved]
+        
+        # Update global best
+        min_loss_idx = np.argmin(P_best_loss)
+        if P_best_loss[min_loss_idx] < G_best_loss:
+            G_best = P_best[min_loss_idx].copy()
+            G_best_loss = P_best_loss[min_loss_idx]
+            
+    res.x = G_best
+    res.fun = G_best_loss
+    return res
+
 # ---------------------------
 # per-target workflow
 # ---------------------------
-def configured_optimizer(loss, v0, lo, hi, opt_method):
+def configured_optimizer(loss, v0, lo, hi, opt_method, n_particles_factor=4):
     bounds_list = list(zip(lo, hi))  # for methods that accept list-of-pairs
     if opt_method=='COBYQA':
         opt = minimize(loss, v0, bounds=bounds_list,
@@ -395,6 +459,9 @@ def configured_optimizer(loss, v0, lo, hi, opt_method):
             jac=None,  # can pass gradient if available
             options=dict(verbose=0, maxiter=300)
         )
+    elif opt_method == 'PSO':
+        n_particles = n_particles_factor * len(v0)
+        opt = particle_swarm_optimization(loss, (lo, hi), n_particles=n_particles)
     else:
         raise ValueError(f"unknown optimization method: {opt_method}")
     return opt
@@ -426,7 +493,10 @@ def process_one_target_optimize(
         supersample_factor=1,
         truth_row=None,
         plot_name=None,
-        initial_guess=None # Added argument
+        initial_guess=None, # Added argument
+        enable_PSO=True,
+        pso_only=False,
+        n_particles_factor=4 # Number of PSO particles = factor * n_params
     ):
     """
     optimize the target galaxy with Sersic + Multipole model.
@@ -463,8 +533,11 @@ def process_one_target_optimize(
         raise ValueError("Weight map (wht) is required.")
 
     # Prepare data for fitting
-    if row_query is not None:
-        seqid_str = str(int(row_query['id']))
+    # In mocks, row['filename'] might be best, but we'll try ID too
+    if hasattr(row_query, 'name') and row_query.name is not None:
+        seqid_str = str(row_query.name)
+    elif row_query is not None and 'sequentialid' in row_query:
+        seqid_str = str(int(row_query['sequentialid']))
     elif truth_row is not None:
         # Try to get ID from truth_row
         if 'id' in truth_row:
@@ -474,17 +547,23 @@ def process_one_target_optimize(
         else:
              seqid_str = "mock"
     else:
-        seqid_str = "unknown"
+        # Fallback to the target string from filename arg if passed via sep or args.
+        # But here we only have row_sep
+        seqid_str = str(int(row_sep['seqid']))
 
     rec = dict(sequentialid=seqid_str) 
     
-    # If using truth_row for redshift or other params?
-    # In mocks, we don't rely on catalog params for initial guess usually (or we use truth)
-    # The code below might use `row`. Let's check further down. 
-
     # Load Data (HDF5)
-    filename_hdf5 = os.path.join(data_dir, seqid_str + '-cropped.hdf5')
-    assert os.path.exists(filename_hdf5)
+    # The cropped file from preprocess_directory has format '{base}-cropped.hdf5'
+    filename_hdf5 = os.path.join(data_dir, f"{seqid_str}-cropped.hdf5")
+    if not os.path.exists(filename_hdf5):
+        # Trying just .hdf5
+        filename_hdf5_alt = os.path.join(data_dir, f"{seqid_str}.hdf5")
+        if os.path.exists(filename_hdf5_alt): 
+            filename_hdf5 = filename_hdf5_alt
+        else:
+            raise FileNotFoundError(f"HDF5 file not found: {filename_hdf5}")
+            
     with h5py.File(filename_hdf5, "r") as data_file:
         sci_bgsub = np.array(data_file['sci_bgsub_crop'])
         wht       = np.array(data_file['wht_crop'])
@@ -568,14 +647,23 @@ def process_one_target_optimize(
     # ---------------------------
     model0 = I0 * model_unit + bg0
     n_param_model = 5 + 3*len(m) 
-    # Initial chi2
-    exptime = np.nan
-    if row_query is not None:
-        exptime = row_query.get('EXPTIME_SCI', 1.0)
-    elif truth_row is not None:
-        exptime = truth_row.get('EXPTIME_SCI', 1.0)
-    if np.isnan(exptime):
-        raise ValueError("EXPTIME_SCI is NaN.")
+    exptime = None
+    if row_query is not None and 'EXPTIME_SCI' in row_query:
+        try:
+            val = float(row_query['EXPTIME_SCI'])
+            if np.isfinite(val):
+                exptime = val
+        except:
+            pass
+    elif truth_row is not None and 'EXPTIME_SCI' in truth_row:
+        try:
+            val = float(truth_row['EXPTIME_SCI'])
+            if np.isfinite(val):
+                exptime = val
+        except:
+            pass
+    if exptime is None:
+        raise ValueError("Could not determine exposure time from row_query or truth_row.")
 
     chi2_reduced_0 = reduced_chi_squared(sci_bgsub, wht, model0, n_param_model, exptime, mask=mask)
     residual_map_0 = residual_map_sigma(sci_bgsub, wht, model0, exptime, mask=mask)
@@ -687,9 +775,13 @@ def process_one_target_optimize(
     # 2. L-BFGS-B
     # 3. trust-constr
     strategies = []
-    if opt_method not in strategies: strategies.append(opt_method)
-    if 'L-BFGS-B' not in strategies: strategies.append('L-BFGS-B')
-    # if 'trust-constr' not in strategies: strategies.append('trust-constr')
+    if pso_only:
+        strategies.append('PSO')
+    else:
+        if opt_method not in strategies: strategies.append(opt_method)
+        if 'L-BFGS-B' not in strategies: strategies.append('L-BFGS-B')
+        if enable_PSO: strategies.append('PSO')
+        # if 'trust-constr' not in strategies: strategies.append('trust-constr')
     
     max_strategies = len(strategies)
     best_res = None
@@ -726,9 +818,15 @@ def process_one_target_optimize(
         v_run = v_start.copy() 
         
         while boundary_retry_count <= max_boundary_retries:
-            print("fitting!")
+            print(f"fitting with {current_method}... ", end="", flush=True)
             start_time = time.time()
-            res = configured_optimizer(loss, v_run, lo, hi, current_method)
+            if current_method == 'PSO':
+                res = configured_optimizer(loss, v_run, lo, hi, current_method, n_particles_factor=n_particles_factor)
+            else:
+                res = configured_optimizer(loss, v_run, lo, hi, current_method)
+            
+            elapsed_time = time.time() - start_time
+            print(f"done in {elapsed_time:.1f}s")
             
             # Check result
             current_loss = res.fun
@@ -886,4 +984,267 @@ def process_one_target_optimize(
         fig_d.savefig(out_final, bbox_inches='tight')
         plt.close(fig_d)
         
+    return rec
+
+# ---------------------------
+# MCMC Workflow
+# ---------------------------
+def process_one_target_mcmc(
+    row_query,
+    data_dir,
+    row_sep=None,
+    opt_row=None,
+    m=[3, 4],
+    PIX_SCALE=0.03,
+    fit_params=None,
+    fix_params=None,
+    use_analytic_amplitude=True,
+    mcmc_config=None,
+    continue_mcmc=False,
+    restart_and_overwrite_mcmc=False,
+    debug=False,
+):
+    """
+    Run MCMC sampling for one target starting from optimization results.
+    """
+    if mcmc_config is None:
+        mcmc_config = {
+            "n_walkers": 32,
+            "n_steps": 2000,
+            "burnin_fraction": 0.3,
+            "init_scale": 1e-4,
+            "random_seed": 42
+        }
+
+    seqid_str = str(int(opt_row['sequentialid']))
+    rec = dict(sequentialid=seqid_str)
+
+    # Load Data (HDF5)
+    filename_hdf5 = os.path.join(data_dir, f"{seqid_str}-cropped.hdf5")
+    with h5py.File(filename_hdf5, "r") as data_file:
+        sci_bgsub = np.array(data_file['sci_bgsub_crop'])
+        wht       = np.array(data_file['wht_crop'])
+        mask      = np.array(data_file['mask_crop'])
+        seg       = np.array(data_file['segmap_crop'])
+
+    X, Y, extent = build_arcsec_grid(sci_bgsub.shape, pixscale=PIX_SCALE)
+    
+    # Get supersample factor if present in opt_row
+    ss = opt_row.get('supersample_factor', 1)
+    if ss > 1:
+        shape_ss = (sci_bgsub.shape[0] * ss, sci_bgsub.shape[1] * ss)
+        pixscale_ss = PIX_SCALE / ss
+        X_ss, Y_ss, _ = build_arcsec_grid(shape_ss, pixscale=pixscale_ss)
+    else:
+        X_ss, Y_ss = X, Y
+
+    val = row_query.get('EXPTIME_SCI', None)
+    if val is None or not np.isfinite(float(val)):
+        raise ValueError("Could not determine exposure time.")
+    exptime = float(val)
+
+    sigma_tot = np.sqrt(sigma_total_squared(
+        wht, sci_bgsub, exptime,
+        poisson_threshold_n=3., mask=mask, verbose=False
+    ))
+
+    # Initialize from best fit
+    k = len(m)
+    p_opt = {}
+    for key in ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background']:
+        p_opt[key] = float(opt_row.get(f"{key}_best", 0.0))
+    a_m_opt = []
+    phi_m_opt = []
+    for mi in m:
+        a_m_opt.append(float(opt_row.get(f"a_m{mi}_best", 0.0)))
+        phi_m_opt.append(float(opt_row.get(f"phi_m{mi}_best", 0.0)))
+    p_opt['a_m'] = np.array(a_m_opt)
+    p_opt['phi_m'] = np.array(phi_m_opt)
+
+    img_half_extent = 0.5 * max(extent[1] - extent[0], extent[3] - extent[2])
+
+    v_opt = pack_params(p_opt, k)
+    lo, hi = default_bounds(m, img_half_extent)
+
+    # Log Probability Function
+    def log_prob(vec):
+        # Bound check
+        if np.any(vec < lo) or np.any(vec > hi):
+            return -np.inf
+            
+        pp = unpack_params(vec, k)
+        if pp['R_sersic'] <= 0 or pp['n_sersic'] <= 0 or pp['q'] <= 0:
+            return -np.inf
+
+        mod_ss = simulate_model_elliptical_multipole(
+            X_ss, Y_ss,
+            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
+            q=pp['q'], theta_ell=pp['theta_ell'], m=m, a_m=pp['a_m'], phi_m=pp['phi_m'],
+            x0=pp['x0'], y0=pp['y0'], background=0.0
+        )
+        if ss > 1:
+            mod = downsample(mod_ss, ss)
+        else:
+            mod = mod_ss
+        mod = mod + pp['background']
+
+        diff = sci_bgsub - mod
+        if mask is not None:
+            valid = (~mask) & np.isfinite(diff) & np.isfinite(sigma_tot)
+        else:
+            valid = np.isfinite(diff) & np.isfinite(sigma_tot)
+
+        res = (diff[valid] / sigma_tot[valid])
+        chi2 = np.sum(res**2)
+        return -0.5 * chi2
+
+    dim = len(v_opt)
+    n_walkers = mcmc_config['n_walkers']
+    n_steps = mcmc_config['n_steps']
+
+    np.random.seed(mcmc_config.get('random_seed', 42))
+    
+    # Init walkers in a tiny ball around the optimization best fit
+    init_scale = mcmc_config['init_scale']
+    pos = v_opt + init_scale * np.random.randn(n_walkers, dim)
+    
+    # Ensure they are within bounds
+    for i in range(n_walkers):
+        pos[i] = np.clip(pos[i], lo + 1e-6, hi - 1e-6)
+
+    # Note: we are importing emcee inside this file now.
+    import emcee
+    sampler = emcee.EnsembleSampler(n_walkers, dim, log_prob)
+    
+    t0 = time.time()
+    print(f"  Running MCMC for {seqid_str} with {n_walkers} walkers, {n_steps} steps...")
+    sampler.run_mcmc(pos, n_steps, progress=True)
+    mcmc_time = time.time() - t0
+
+    # Determine Burn-in using Auto-correlation time
+    try:
+        tau = sampler.get_autocorr_time(tol=0)
+        burnin = int(2 * np.max(tau))
+        thin = int(0.5 * np.min(tau))
+        if thin == 0: thin = 1
+        if burnin >= n_steps: 
+            burnin = int(mcmc_config['burnin_fraction'] * n_steps)
+    except Exception as e:
+        print(f"  Autocorrelation warning: {e}. Using fixed fraction.")
+        burnin = int(mcmc_config['burnin_fraction'] * n_steps)
+        thin = 1
+        
+    flat_samples = sampler.get_chain(discard=burnin, thin=thin, flat=True)
+    
+    # Get parameter names
+    param_names = ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell']
+    for mi in m: param_names.append(f"a_m{mi}")
+    for mi in m: param_names.append(f"phi_m{mi}")
+    param_names.extend(['x0', 'y0', 'background'])
+
+    # Debug Plots
+    if debug:
+        import corner
+        # Trace Plot
+        # Get chain with unflattened shape (n_steps, n_walkers, dim)
+        chain = sampler.get_chain()
+        fig_trace, axes_trace = plt.subplots(dim, 1, figsize=(10, 1.5 * dim), sharex=True)
+        for i in range(dim):
+            ax = axes_trace[i]
+            ax.plot(chain[:, :, i], "k", alpha=0.3)
+            ax.set_xlim(0, n_steps)
+            ax.set_ylabel(param_names[i])
+            ax.axvline(burnin, color="red", linestyle="--", lw=2, label="burn-in")
+        axes_trace[-1].set_xlabel("step number")
+        axes_trace[0].legend()
+        fig_trace.tight_layout()
+        trace_file = os.path.join(data_dir, f"{seqid_str}-10-mcmc_trace.pdf")
+        fig_trace.savefig(trace_file)
+        plt.close(fig_trace)
+        
+        # Corner Plot
+        fig_corner = corner.corner(
+            flat_samples, labels=param_names, truths=v_opt,
+            quantiles=[0.16, 0.5, 0.84], show_titles=True, title_kwargs={"fontsize": 12}
+        )
+        corner_file = os.path.join(data_dir, f"{seqid_str}-11-mcmc_corner.pdf")
+        fig_corner.savefig(corner_file)
+        plt.close(fig_corner)
+
+    # Compute Results
+    mcmc_best = np.percentile(flat_samples, 50, axis=0) # Median
+    mcmc_16 = np.percentile(flat_samples, 16, axis=0)
+    mcmc_84 = np.percentile(flat_samples, 84, axis=0)
+    mcmc_err = (mcmc_84 - mcmc_16) / 2.0
+
+    p_mcmc_best = unpack_params(mcmc_best, k)
+    
+    # Store Best & Err
+    rec['mcmc_time'] = mcmc_time
+    rec['mcmc_n_steps_used'] = n_steps
+    rec['mcmc_burnin'] = burnin
+    
+    for key in p_mcmc_best:
+        if isinstance(p_mcmc_best[key], np.ndarray):
+            for i, val in enumerate(p_mcmc_best[key]):
+                rec[f"{key}{m[i]}_mcmc_best"] = val
+        else:
+            rec[f"{key}_mcmc_best"] = p_mcmc_best[key]
+            
+    # Unpack Error
+    idx = 0
+    rec['n_sersic_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['R_sersic_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['amplitude_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['q_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['theta_ell_mcmc_err'] = mcmc_err[idx]; idx+=1
+    for i in range(k): rec[f"a_m{m[i]}_mcmc_err"] = mcmc_err[idx]; idx+=1
+    for i in range(k): rec[f"phi_m{m[i]}_mcmc_err"] = mcmc_err[idx]; idx+=1
+    rec['x0_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['y0_mcmc_err'] = mcmc_err[idx]; idx+=1
+    rec['background_mcmc_err'] = mcmc_err[idx]; idx+=1
+
+    # Optional final detailed plot using MCMC results
+    mod_ss = simulate_model_elliptical_multipole(
+        X_ss, Y_ss,
+        n_sersic=p_mcmc_best['n_sersic'], R_sersic=p_mcmc_best['R_sersic'], amplitude=p_mcmc_best['amplitude'],
+        q=p_mcmc_best['q'], theta_ell=p_mcmc_best['theta_ell'], m=m, a_m=p_mcmc_best['a_m'], phi_m=p_mcmc_best['phi_m'],
+        x0=p_mcmc_best['x0'], y0=p_mcmc_best['y0'], background=0.0
+    )
+    if ss > 1:
+        mod_final = downsample(mod_ss, ss)
+    else:
+        mod_final = mod_ss
+    mod_final = mod_final + p_mcmc_best['background']
+        
+    res_map_final = residual_map_sigma(sci_bgsub, wht, mod_final, exptime, mask=mask)
+    chi2_final = reduced_chi_squared(sci_bgsub, wht, mod_final, dim, exptime, mask=mask)
+    
+    rec['loss_mcmc_final'] = chi2_final
+    
+    p_best_flat = {}
+    p_unc_flat = {}
+    for keys in ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background']:
+        p_best_flat[keys] = p_mcmc_best[keys]
+        p_unc_flat[keys] = rec[f"{keys}_mcmc_err"]
+    for i, mi in enumerate(m):
+        p_best_flat[f"a_m{mi}"] = p_mcmc_best['a_m'][i]
+        p_unc_flat[f"a_m{mi}"] = rec[f"a_m{mi}_mcmc_err"]
+    for i, mi in enumerate(m):
+        p_best_flat[f"phi_m{mi}"] = p_mcmc_best['phi_m'][i]
+        p_unc_flat[f"phi_m{mi}"] = rec[f"phi_m{mi}_mcmc_err"]
+             
+    meta = f"Loss MCMC: {chi2_final:.2f}\nSS Factor: {ss}\nMCMC Time: {mcmc_time:.1f}s"
+        
+    fig_d, axs_d = detailed_comparison_plot(
+        np.ma.masked_array(sci_bgsub, mask=mask), mod_final, res_map_final,
+        extent=extent,
+        param_best=p_best_flat, param_unc=p_unc_flat, param_true=None,
+        meta_info_str=meta, scale='asinh'
+    )
+        
+    out_final = os.path.join(data_dir, f"{seqid_str}-12-after_mcmc.pdf")
+    fig_d.savefig(out_final, bbox_inches='tight')
+    plt.close(fig_d)
+
     return rec

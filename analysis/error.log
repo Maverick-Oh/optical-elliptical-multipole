@@ -1,0 +1,61 @@
+/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_misc.py:76: UserWarning: pyaudio not found. Sound features will be disabled.
+  warnings.warn("pyaudio not found. Sound features will be disabled.")
+Processing mock directories:   0%|          | 0/1 [00:00<?, ?dir/s]
+  Fitting mock_varying_a_m3:   0%|          | 0/8 [00:00<?, ?fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  12%|█▎        | 1/8 [00:00<00:06,  1.14fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  25%|██▌       | 2/8 [00:01<00:04,  1.36fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  38%|███▊      | 3/8 [00:01<00:03,  1.58fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  50%|█████     | 4/8 [00:02<00:02,  1.77fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  62%|██████▎   | 5/8 [00:02<00:01,  1.95fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  75%|███████▌  | 6/8 [00:02<00:00,  2.11fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3:  88%|████████▊ | 7/8 [00:03<00:00,  2.20fit/s][ATraceback (most recent call last):
+  File "mock_run_fitting-nonjax.py", line 527, in run_fitting
+    rec_fit = process_one_target_optimize(
+  File "/Volumes/MavSSD_T5/Dropbox/Google_Drive/code/research_Anna/optical-elliptical-multipole/analysis/tools_fitting.py", line 667, in process_one_target_optimize
+    raise ValueError("Could not determine exposure time for initial chi2 calculation.")
+ValueError: Could not determine exposure time for initial chi2 calculation.
+
+  Fitting mock_varying_a_m3: 100%|██████████| 8/8 [00:03<00:00,  2.18fit/s][A
+                                                                           [AProcessing mock directories: 100%|██████████| 1/1 [00:05<00:00,  5.31s/dir]Processing mock directories: 100%|██████████| 1/1 [00:05<00:00,  5.31s/dir]

@@ -67,11 +67,11 @@ def comparison_plot(im1, im2, *,
                        vmin=-lim if residual_vmin is None else residual_vmin,
                        vmax=+lim if residual_vmax is None else residual_vmax)
 
-    fig.colorbar(h1, ax=axs[0], location='right', fraction=0.046, pad=0.04)
+    fig.colorbar(h1, ax=axs[0], fraction=0.046, pad=0.04)
     axs[0].set_title(labels[0])
-    fig.colorbar(h2, ax=axs[1], location='right', fraction=0.046, pad=0.04)
+    fig.colorbar(h2, ax=axs[1], fraction=0.046, pad=0.04)
     axs[1].set_title(labels[1])
-    fig.colorbar(h3, ax=axs[2], location='right', fraction=0.046, pad=0.04)
+    fig.colorbar(h3, ax=axs[2], fraction=0.046, pad=0.04)
     axs[2].set_title(labels[2])
 
     if extra_text:
@@ -142,11 +142,11 @@ def detailed_comparison_plot(im1, im2, residual_map, *,
     h3 = axs[0,2].imshow(residual_map, extent=extent, origin='lower', cmap='bwr', aspect='equal',
                          vmin=residual_vmin, vmax=residual_vmax)
     
-    fig.colorbar(h1, ax=axs[0,0], location='right', fraction=0.046, pad=0.04)
+    fig.colorbar(h1, ax=axs[0,0], fraction=0.046, pad=0.04)
     axs[0,0].set_title('Observed')
-    fig.colorbar(h2, ax=axs[0,1], location='right', fraction=0.046, pad=0.04)
+    fig.colorbar(h2, ax=axs[0,1], fraction=0.046, pad=0.04)
     axs[0,1].set_title('Model')
-    cbar3 = fig.colorbar(h3, ax=axs[0,2], location='right', fraction=0.046, pad=0.04, extend='both')
+    cbar3 = fig.colorbar(h3, ax=axs[0,2], fraction=0.046, pad=0.04, extend='both')
     axs[0,2].set_title('Residual (σ)')
     
     # --- ROW 2: Parameters and Info ---
@@ -242,7 +242,7 @@ def _discrete_cmap(n, target_index=1, randomize=False, seed=42):
     cmap = ListedColormap(colors)
     return cmap
 
-def draw_segmentation(ax, segmap, target_label: int, title: str|None = None, zeros_mask=None,
+def draw_segmentation(ax, segmap, target_label: int, title=None, zeros_mask=None,
                       a50=None, a90=None, a99=None, q=None, theta=None, center_xy=None, seed=42, outline=False,
                       randomize_cmap=False, **kwargs):
     # base layer: grayscale of segmap (masked zeros)
