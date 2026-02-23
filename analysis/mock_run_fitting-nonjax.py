@@ -514,8 +514,7 @@ def run_fitting():
                         print(f"  FAILURE: 03 plot NOT created despite no exception.")
                 except Exception as e:
                     print(f"  Warning: Failed to create 03-masked_and_cropped: {e}")
-
-
+                
                 rec_fit = process_one_target_optimize(
                     row_query=None, 
                     data_dir=target_d, 

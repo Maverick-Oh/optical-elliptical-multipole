@@ -85,3 +85,18 @@ def sersic(R, amplitude=1.0, R_sersic=1.0, n_sersic=4.0):
     # For R=0 -> x=0 -> logx=-inf -> pow_term=0 -> exp(bn) finite
     out = np.where(x >= 0, out, 0.0)
     return out
+
+
+if __name__ == "__main__":
+    print('debug of intensity_functions.py')
+    range_arcsec = 2
+    ss_factor = 10 # supersample factor
+    r = 0.03*np.arange(int(range_arcsec/0.03))
+    r_ss = 0.03 / ss_factor * np.arange(int(range_arcsec/0.03*ss_factor))
+    #
+    y = sersic(r, amplitude=1.0, R_sersic=0.5, n_sersic=4.0)
+    y_ss = sersic(r_ss, amplitude=1.0, R_sersic=0.5, n_sersic=4.0)
+    #
+    plt.plot(r, y, 'k-')
+    plt.plot(r_ss, y_ss, 'r-')
+    plt.show()
