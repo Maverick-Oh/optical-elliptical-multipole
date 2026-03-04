@@ -1,3 +1,4 @@
+*.log
 bench_out
 .vscode/
 *.csv
