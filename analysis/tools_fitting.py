@@ -678,7 +678,7 @@ def process_one_target_optimize(
         p0_flat[f"phi_m{mi}"] = p0_elliptical_multipole['phi_m'][i]
     
     # Truth parameters (if provided)
-    p_true_flat_0 = truth_row if truth_row else {}
+    p_true_flat_0 = {k.replace('_true', ''): v for k, v in truth_row.items()} if truth_row else {}
     
     # Meta info for initial plot
     meta_0 = f"Loss Init: {chi2_reduced_0:.2f}\nSS Factor: {supersample_factor}"
@@ -800,6 +800,15 @@ def process_one_target_optimize(
 
     found_satisfactory_solution = False
 
+    # Independent tracking for non-PSO and PSO (to save both)
+    res_non_pso = None
+    loss_non_pso = np.inf
+    time_non_pso = np.nan
+
+    res_pso = None
+    loss_pso = np.inf
+    time_pso = np.nan
+
     v_start = pack_params(p0_elliptical_multipole.copy(),k)
     
     for attempt_idx, current_method in enumerate(strategies):
@@ -838,6 +847,18 @@ def process_one_target_optimize(
                 final_v_best = res.x
                 final_attempt_count = attempt_idx + 1 # 1-based index of strategy used
                 best_strategy_name = current_method
+
+            # Independent tracking
+            if current_method == 'PSO':
+                if current_loss < loss_pso:
+                    loss_pso = current_loss
+                    res_pso = res
+                    time_pso = elapsed_time
+            else:
+                if current_loss < loss_non_pso:
+                    loss_non_pso = current_loss
+                    res_non_pso = res
+                    time_non_pso = elapsed_time
 
             # 1. Check Target Loss
             if current_loss <= target_loss:
@@ -902,37 +923,64 @@ def process_one_target_optimize(
     rec['opt_attempts_count'] = final_attempt_count
     rec['opt_best_attempt'] = final_attempt_count - 1 # 0-indexed best attempt
     rec['opt_best_strategy'] = best_strategy_name
-    
-    # Error Estimation (Jacobian) with bounds to prevent invalid parameter perturbations
-    v_err = jacobian_error_estimate(v_best, residual_vector, bounds=(lo, hi), verbose=verbose)
-    
+    # Global variables for standard logic
     p_best = unpack_params(v_best, k)
     p_best['supersample_factor'] = supersample_factor
     
-    # Update Rec
-    for k_ in p_best:
-        if isinstance(p_best[k_], np.ndarray): # for a_m and phi_m
-             for i, val in enumerate(p_best[k_]):
-                 rec[f"{k_}{m[i] if k_ in ['a_m', 'phi_m'] else i}_best"] = val
-        else:
-            rec[f"{k_}_best"] = p_best[k_]
-            
-    # Unpack Error
-    # Need to match order of pack_params
-    # n_sersic, R_sersic, amplitude, q, theta_ell, a_m[:], phi_m[:], x0, y0, background
-    idx = 0
-    rec['n_sersic_err'] = v_err[idx]; idx+=1
-    rec['R_sersic_err'] = v_err[idx]; idx+=1
-    rec['amplitude_err'] = v_err[idx]; idx+=1
-    rec['q_err'] = v_err[idx]; idx+=1
-    rec['theta_ell_err'] = v_err[idx]; idx+=1
-    for i in range(k):
-        rec[f"a_m{m[i]}_err"] = v_err[idx]; idx+=1
-    for i in range(k):
-        rec[f"phi_m{m[i]}_err"] = v_err[idx]; idx+=1
-    rec['x0_err'] = v_err[idx]; idx+=1
-    rec['y0_err'] = v_err[idx]; idx+=1
-    rec['background_err'] = v_err[idx]; idx+=1
+    # Error Estimation and Param Unpacking natively mapped specifically for each run outcome!
+    if res_non_pso is not None:
+        rec['loss_non_pso'] = loss_non_pso
+        rec['opt_time_non_pso'] = time_non_pso
+        v_err_non_pso = jacobian_error_estimate(res_non_pso.x, residual_vector, bounds=(lo, hi), verbose=verbose)
+        p_best_non_pso = unpack_params(res_non_pso.x, k)
+        
+        # Populate *_best
+        for k_ in p_best_non_pso:
+            if isinstance(p_best_non_pso[k_], np.ndarray):
+                 for i, val in enumerate(p_best_non_pso[k_]):
+                     rec[f"{k_}{m[i] if k_ in ['a_m', 'phi_m'] else i}_best"] = val
+            else:
+                rec[f"{k_}_best"] = p_best_non_pso[k_]
+                
+        # Unpack Error
+        idx = 0
+        rec['n_sersic_err'] = v_err_non_pso[idx]; idx+=1
+        rec['R_sersic_err'] = v_err_non_pso[idx]; idx+=1
+        rec['amplitude_err'] = v_err_non_pso[idx]; idx+=1
+        rec['q_err'] = v_err_non_pso[idx]; idx+=1
+        rec['theta_ell_err'] = v_err_non_pso[idx]; idx+=1
+        for i in range(k): rec[f"a_m{m[i]}_err"] = v_err_non_pso[idx]; idx+=1
+        for i in range(k): rec[f"phi_m{m[i]}_err"] = v_err_non_pso[idx]; idx+=1
+        rec['x0_err'] = v_err_non_pso[idx]; idx+=1
+        rec['y0_err'] = v_err_non_pso[idx]; idx+=1
+        rec['background_err'] = v_err_non_pso[idx]; idx+=1
+
+    if res_pso is not None:
+        rec['loss_pso'] = loss_pso
+        rec['opt_time_pso'] = time_pso
+        v_err_pso = jacobian_error_estimate(res_pso.x, residual_vector, bounds=(lo, hi), verbose=verbose)
+        p_best_pso = unpack_params(res_pso.x, k)
+        
+        # Populate *_pso_best
+        for k_ in p_best_pso:
+            if isinstance(p_best_pso[k_], np.ndarray):
+                 for i, val in enumerate(p_best_pso[k_]):
+                     rec[f"{k_}{m[i] if k_ in ['a_m', 'phi_m'] else i}_pso_best"] = val
+            else:
+                rec[f"{k_}_pso_best"] = p_best_pso[k_]
+                
+        # Unpack Error
+        idx = 0
+        rec['n_sersic_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['R_sersic_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['amplitude_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['q_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['theta_ell_pso_err'] = v_err_pso[idx]; idx+=1
+        for i in range(k): rec[f"a_m{m[i]}_pso_err"] = v_err_pso[idx]; idx+=1
+        for i in range(k): rec[f"phi_m{m[i]}_pso_err"] = v_err_pso[idx]; idx+=1
+        rec['x0_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['y0_pso_err'] = v_err_pso[idx]; idx+=1
+        rec['background_pso_err'] = v_err_pso[idx]; idx+=1
 
     # Final Plot (Detailed)
     if plot_final_contour:
@@ -968,7 +1016,7 @@ def process_one_target_optimize(
              p_unc_flat[f"phi_m{mi}"] = rec.get(f"phi_m{mi}_err", np.nan)
              
         # Truth Dict (if provided)
-        p_true_flat = truth_row if truth_row else {}
+        p_true_flat = {k.replace('_true', ''): v for k, v in truth_row.items()} if truth_row else {}
         
         meta = f"Loss Init: {chi2_reduced_0:.2f}\nLoss Final: {res.fun:.2f}\nAttempts: 1\nSS Factor: {supersample_factor}\nTime: TBD"
         
@@ -1000,9 +1048,11 @@ def process_one_target_mcmc(
     fix_params=None,
     use_analytic_amplitude=True,
     mcmc_config=None,
+    supersample_factor=1,
     continue_mcmc=False,
     restart_and_overwrite_mcmc=False,
     debug=False,
+    truth_row=None,
 ):
     """
     Run MCMC sampling for one target starting from optimization results.
@@ -1030,7 +1080,7 @@ def process_one_target_mcmc(
     X, Y, extent = build_arcsec_grid(sci_bgsub.shape, pixscale=PIX_SCALE)
     
     # Get supersample factor if present in opt_row
-    ss = opt_row.get('supersample_factor', 1)
+    ss = supersample_factor
     if ss > 1:
         shape_ss = (sci_bgsub.shape[0] * ss, sci_bgsub.shape[1] * ss)
         pixscale_ss = PIX_SCALE / ss
@@ -1112,14 +1162,55 @@ def process_one_target_mcmc(
     for i in range(n_walkers):
         pos[i] = np.clip(pos[i], lo + 1e-6, hi - 1e-6)
 
-    # Note: we are importing emcee inside this file now.
     import emcee
-    sampler = emcee.EnsembleSampler(n_walkers, dim, log_prob)
+    backend_file = os.path.join(data_dir, f"{seqid_str}-mcmc_backend.h5")
+    backend = emcee.backends.HDFBackend(backend_file)
+    
+    if restart_and_overwrite_mcmc:
+        backend.reset(n_walkers, dim)
+    elif not continue_mcmc:
+        backend.reset(n_walkers, dim)
+        
+    sampler = emcee.EnsembleSampler(n_walkers, dim, log_prob, backend=backend)
     
     t0 = time.time()
-    print(f"  Running MCMC for {seqid_str} with {n_walkers} walkers, {n_steps} steps...")
-    sampler.run_mcmc(pos, n_steps, progress=True)
+    
+    # Auto-convergence loop
+    max_steps = mcmc_config.get('n_steps', 5000)
+    check_interval = 200
+    
+    # Track autocorrelation time to test for convergence
+    old_tau = np.inf
+    converged = False
+    
+    # Only supply initial pos if starting fresh
+    if backend.iteration == 0:
+        initial_state = pos
+        print(f"  Starting fresh MCMC for {seqid_str} with {n_walkers} walkers...")
+    else:
+        initial_state = None
+        print(f"  Resuming MCMC for {seqid_str} from step {backend.iteration}...")
+        
+    for sample in sampler.sample(initial_state, iterations=max_steps, progress=True):
+        if sampler.iteration % check_interval == 0:
+            try:
+                # Compute tau with tolerance=0 so it doesn't crash if chain is too short
+                tau = sampler.get_autocorr_time(tol=0)
+                
+                # Check convergence
+                converged = np.all(tau * 100 < sampler.iteration)
+                converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+                if converged:
+                    print(f"  Convergence reached at step {sampler.iteration}!")
+                    break
+                old_tau = tau
+            except emcee.autocorr.AutocorrError:
+                # Not enough steps to estimate tau reliably
+                pass
+            
     mcmc_time = time.time() - t0
+    if not converged:
+        print(f"  MCMC stopped at max {sampler.iteration} steps without fully satisfying convergence criteria.")
 
     # Determine Burn-in using Auto-correlation time
     try:
@@ -1127,11 +1218,11 @@ def process_one_target_mcmc(
         burnin = int(2 * np.max(tau))
         thin = int(0.5 * np.min(tau))
         if thin == 0: thin = 1
-        if burnin >= n_steps: 
-            burnin = int(mcmc_config['burnin_fraction'] * n_steps)
+        if burnin >= sampler.iteration: 
+            burnin = int(mcmc_config.get('burnin_fraction', 0.3) * sampler.iteration)
     except Exception as e:
         print(f"  Autocorrelation warning: {e}. Using fixed fraction.")
-        burnin = int(mcmc_config['burnin_fraction'] * n_steps)
+        burnin = int(mcmc_config.get('burnin_fraction', 0.3) * sampler.iteration)
         thin = 1
         
     flat_samples = sampler.get_chain(discard=burnin, thin=thin, flat=True)
@@ -1149,10 +1240,12 @@ def process_one_target_mcmc(
         # Get chain with unflattened shape (n_steps, n_walkers, dim)
         chain = sampler.get_chain()
         fig_trace, axes_trace = plt.subplots(dim, 1, figsize=(10, 1.5 * dim), sharex=True)
+        max_tau_str = f"{np.max(tau):.1f}" if 'tau' in locals() and hasattr(tau, '__iter__') else "unknown"
+        fig_trace.suptitle(f"MCMC Trace (max tau: {max_tau_str}, burn-in: {burnin}, fully-converged: {converged})", fontsize=14)
         for i in range(dim):
             ax = axes_trace[i]
             ax.plot(chain[:, :, i], "k", alpha=0.3)
-            ax.set_xlim(0, n_steps)
+            ax.set_xlim(0, sampler.iteration)
             ax.set_ylabel(param_names[i])
             ax.axvline(burnin, color="red", linestyle="--", lw=2, label="burn-in")
         axes_trace[-1].set_xlabel("step number")
@@ -1236,10 +1329,12 @@ def process_one_target_mcmc(
              
     meta = f"Loss MCMC: {chi2_final:.2f}\nSS Factor: {ss}\nMCMC Time: {mcmc_time:.1f}s"
         
+    p_true_flat = {k.replace('_true', ''): v for k, v in truth_row.items()} if truth_row else {}
+        
     fig_d, axs_d = detailed_comparison_plot(
         np.ma.masked_array(sci_bgsub, mask=mask), mod_final, res_map_final,
         extent=extent,
-        param_best=p_best_flat, param_unc=p_unc_flat, param_true=None,
+        param_best=p_best_flat, param_unc=p_unc_flat, param_true=p_true_flat,
         meta_info_str=meta, scale='asinh'
     )
         

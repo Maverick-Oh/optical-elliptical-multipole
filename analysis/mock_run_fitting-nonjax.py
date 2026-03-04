@@ -297,6 +297,8 @@ def run_fitting():
     parser.add_argument("--skip-fitting", action="store_true", help="Skip optimization fitting")
     parser.add_argument("--skip-mcmc", action="store_true", help="Skip MCMC inference")
     parser.add_argument("--mcmc-only", action="store_true", help="Run MCMC inference only (requires fitting results)")
+    parser.add_argument("--continue-mcmc", action="store_true", help="Continue MCMC from existing HDF5 backend")
+    parser.add_argument("--restart-mcmc", action="store_true", help="Restart MCMC overwriting existing HDF5 backend")
     parser.add_argument("--pso-only", action="store_true", help="Run *only* PSO (skip SLSQP, L-BFGS-B, trust-constr)")
     parser.add_argument("--disable-pso", action="store_true", help="Disable PSO fallback on optimization failure")
     parser.add_argument("--n-particles-factor", type=int, default=4, help="PSO particles = factor * n_params")
@@ -307,11 +309,8 @@ def run_fitting():
         args.out_dir = args.source_dir
         print(f"Output directory not specified, using source directory: {args.out_dir}")
 
-    # # Create Output Directory Root
-    # if args.out_dir is None:
-    #     args.out_dir = os.path.join(args.source_dir, f"mock_fitting-{datetime.now().strftime('%m%d-%H%M')}")
-    # if not os.path.exists(args.out_dir):
-    #     os.makedirs(args.out_dir)
+    global OUTPUT_FILENAME
+    OUTPUT_FILENAME = "fitting_results.csv"
         
     # Source Directories (Raw Mocks)
     if args.source_dir:
@@ -373,6 +372,10 @@ def run_fitting():
             except Exception as e:
                 print(f"  Failed to load truth CSV: {e}")
 
+        # Determine files
+        fits_files = glob.glob(os.path.join(target_d, "*-SCI.fits"))
+        fits_files.sort()
+
         # 3. Fit
         # Check if results exist
         out_path = os.path.join(target_d, OUTPUT_FILENAME)
@@ -381,196 +384,191 @@ def run_fitting():
         if os.path.exists(out_path) and (args.skip_fitting or args.mcmc_only):
              print(f"  Result file exists. Skipping optimization fitting.")
         elif not args.mcmc_only:
-            # Opt Loop
-
-            # Load Truth to match seqid? Or just loop over FITS
-            fits_files = glob.glob(os.path.join(target_d, "*-SCI.fits"))
-            fits_files.sort()
-            
             results = []
-        
+            
         # Progress bar for individual fits within each directory
-        for f_sci in tqdm(fits_files, desc=f"  Fitting {dir_name}", unit="fit", leave=False):
-            base = os.path.basename(f_sci).replace("-SCI.fits", "")
-            f_wht = os.path.join(target_d, f"{base}-WHT.fits")
+        if not (os.path.exists(out_path) and (args.skip_fitting or args.mcmc_only)) and not args.mcmc_only:
+            for f_sci in tqdm(fits_files, desc=f"  Fitting {dir_name}", unit="fit", leave=False):
+                base = os.path.basename(f_sci).replace("-SCI.fits", "")
+                f_wht = os.path.join(target_d, f"{base}-WHT.fits")
             
-            if not os.path.exists(f_wht): continue
+                if not os.path.exists(f_wht): continue
             
-            with fits.open(f_sci) as hdu:
-                hdr = hdu[0].header
+                with fits.open(f_sci) as hdu:
+                    hdr = hdu[0].header
             
-            row_query, row_sep = make_dummy_rows(hdr, base)
+                row_query, row_sep = make_dummy_rows(hdr, base)
             
-            # Retrieve truth row
-            try:
-                seqpixel = int(base) # Assuming base is integer
-                row_truth = truth_dict.get(seqpixel, None)
-            except:
-                row_truth = None
-             
-            m_list = [3, 4]
-            t0 = time.time()
-            try:
-                print(f"  Starting fit for {base}...")
-                # Define plot_base for the new call
-                plot_base = os.path.join(target_d, f"{base}_fit") # Assuming plot_base is derived from base and target_d
-
-                # The new call to process_one_target_optimize expects different arguments.
-                # It seems to expect the cropped maps directly, rather than paths and SEP data.
-                # This implies that the `preprocess_directory` function (or similar logic)
-                # should have already loaded/created these `_crop` variables.
-                # For now, we'll assume `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop` are available
-                # from the preprocessing step, and `psf_crop` would also need to be defined.
-                # Since `psf_crop` is not defined in the provided context, I'll comment it out
-                # or assume it's meant to be a placeholder for a future change.
-                # Given the context, it's likely that the `preprocess_directory` function
-                # is responsible for generating these cropped files, and they would then
-                # need to be loaded here. However, the instruction only provides the
-                # `process_one_target_optimize` call signature.
-
-                # To make this syntactically correct and reflect the user's intent
-                # of passing cropped data, we need to ensure these variables exist.
-                # The previous `preprocess_directory` call would have created HDF5 files.
-                # We need to load them here if `args.preprocess` was true.
-                # This part is not explicitly in the instruction, but necessary for the
-                # provided `process_one_target_optimize` call to work.
-
-                # Let's assume for now that `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
-                # are loaded from the HDF5 file created by preprocessing.
-                # This loading logic is not in the provided snippet, so I'll add a placeholder
-                # comment for it.
-
-                # Placeholder for loading cropped data if preprocess was run
-                # if args.preprocess:
-                #     hdf5_fn = os.path.join(target_d, f"{base}.hdf5")
-                #     if os.path.exists(hdf5_fn):
-                #         with h5py.File(hdf5_fn, "r") as f:
-                #             sci_crop = f["sci_bgsub_crop"][()]
-                #             wht_crop = f["wht_crop"][()]
-                #             seg_crop = f["segmap_crop"][()]
-                #             msk_crop = f["mask_crop"][()]
-                #             # psf_crop would also need to be loaded/generated
-                #     else:
-                #         # Handle case where HDF5 not found after preprocess
-                #         print(f"  Warning: HDF5 for {base} not found after preprocessing. Falling back to full frames or skipping.")
-                #         # For now, we'll assume the original `process_one_target_optimize`
-                #         # arguments are used if cropped data isn't available.
-                #         # However, the instruction explicitly changes the call signature.
-                #         # This is a potential inconsistency between the instruction and the full context.
-                #         # I will proceed with the instruction's call signature, assuming the user
-                #         # will handle the definition of these variables.
-
-                # For the purpose of this edit, I will assume `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
-                # and `psf_crop` (even if it's a dummy for now) are defined.
-                # If they are not, the code will fail at runtime, but the edit will be syntactically correct
-                # as per the instruction.
-
-                # To make the provided snippet work, I need to define `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
-                # and `psf_crop` (even if as dummy arrays) for the purpose of this edit.
-                # However, the instruction only provides the call signature, not the definition of these variables.
-                # The most faithful way is to replace the call as requested, and assume the user will ensure
-                # these variables are correctly populated.
-
-                # Given the previous `preprocess_directory` call, it's highly probable that
-                # the HDF5 files are created. The `run_fitting` function needs to load them.
-                # I will add a minimal loading logic to make the provided `process_one_target_optimize` call valid.
-                # This is an interpretation to make the change syntactically correct and runnable.
-
-                # The HDF5 file created by preprocess_directory is named '{base}-cropped.hdf5'
-                hdf5_fn = os.path.join(target_d, f"{base}-cropped.hdf5")
-                if not os.path.exists(hdf5_fn):
-                     # Check alternate name just in case
-                     hdf5_fn_alt = os.path.join(target_d, f"{base}.hdf5")
-                     if os.path.exists(hdf5_fn_alt):
-                         hdf5_fn = hdf5_fn_alt
-
-                if os.path.exists(hdf5_fn):
-                    with h5py.File(hdf5_fn, "r") as f:
-                        sci_crop = f["sci_bgsub_crop"][()]
-                        wht_crop = f["wht_crop"][()]
-                        seg_crop = f["segmap_crop"][()]
-                        msk_crop = f["mask_crop"][()]
-                        # Assuming psf_crop is also available or can be derived/dummy
-                        # For now, let's make a dummy psf_crop if not explicitly loaded
-                        # In a real scenario, PSF would be loaded or generated.
-                        # If the HDF5 doesn't contain PSF, this would need adjustment.
-                        # For this edit, I'll assume a placeholder or that it's handled elsewhere.
-                        # Let's use a dummy for now to avoid a NameError.
-                        psf_crop = np.ones((5,5)) # Placeholder, user needs to define actual PSF
-                else:
-                    # If HDF5 not found, it means preprocessing didn't happen or failed.
-                    # The new call signature for process_one_target_optimize expects cropped data.
-                    # This is a critical point. If cropped data isn't available, the new call will fail.
-                    # The instruction doesn't provide fallback for this.
-                    # For now, I will raise an error if cropped data is expected but not found.
-                    raise FileNotFoundError(f"Cropped HDF5 file not found for {base}. Cannot proceed with new fitting call.")
-
-                # ------------------------------------------------------------------
-                # Verify Masked and Cropped Data (User Request)
-                # ------------------------------------------------------------------
-                plot_03_out = os.path.join(target_d, f"{base}-03-masked_and_cropped.pdf")
-                print(f"  Attempting to save 03 plot to: {plot_03_out}")
+                # Retrieve truth row
                 try:
-                    plot_masked_and_cropped(
-                        sci_crop, msk_crop, wht=wht_crop, 
-                        extent=None, # Pixel coords
-                        filename_sci=f"{base}-SCI.fits",
-                        out_path=plot_03_out
-                    )
-                    if os.path.exists(plot_03_out):
-                        print(f"  SUCCESS: 03 plot created.")
-                    else:
-                        print(f"  FAILURE: 03 plot NOT created despite no exception.")
-                except Exception as e:
-                    print(f"  Warning: Failed to create 03-masked_and_cropped: {e}")
-                
-                rec_fit = process_one_target_optimize(
-                    row_query=row_query, 
-                    data_dir=target_d, 
-                    row_sep=row_sep, # Use the row_sep obtained from make_dummy_rows
-                    sci=sci_crop, 
-                    wht=wht_crop, 
-                    psf=psf_crop,
-                    mask=msk_crop,
-                    segmap=seg_crop,
-                    initial_guess=None,
-                    plot_name=plot_base,
-                    plot_final_contour=True, 
-                    supersample_factor=args.supersample,
-                    truth_row=row_truth,
-                    target_loss=0.0, # modified according to request to force PSO fallback when testing
-                    enable_PSO=not args.disable_pso,
-                    pso_only=args.pso_only,
-                    n_particles_factor=args.n_particles_factor
-                )
-                print(f"  Fit finished for {base}.")
+                    seqpixel = int(base) # Assuming base is integer
+                    row_truth = truth_dict.get(seqpixel, None)
+                except:
+                    row_truth = None
+             
+                m_list = [3, 4]
+                t0 = time.time()
+                try:
+                    print(f"  Starting fit for {base}...")
+                    # Define plot_base for the new call
+                    plot_base = os.path.join(target_d, f"{base}_fit") # Assuming plot_base is derived from base and target_d
 
-                rec_fit['fit_time'] = time.time() - t0
-                rec_fit['id'] = seqpixel if seqpixel is not None else -1
-                rec_fit['filename'] = base
+                    # The new call to process_one_target_optimize expects different arguments.
+                    # It seems to expect the cropped maps directly, rather than paths and SEP data.
+                    # This implies that the `preprocess_directory` function (or similar logic)
+                    # should have already loaded/created these `_crop` variables.
+                    # For now, we'll assume `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop` are available
+                    # from the preprocessing step, and `psf_crop` would also need to be defined.
+                    # Since `psf_crop` is not defined in the provided context, I'll comment it out
+                    # or assume it's meant to be a placeholder for a future change.
+                    # Given the context, it's likely that the `preprocess_directory` function
+                    # is responsible for generating these cropped files, and they would then
+                    # need to be loaded here. However, the instruction only provides the
+                    # `process_one_target_optimize` call signature.
+
+                    # To make this syntactically correct and reflect the user's intent
+                    # of passing cropped data, we need to ensure these variables exist.
+                    # The previous `preprocess_directory` call would have created HDF5 files.
+                    # We need to load them here if `args.preprocess` was true.
+                    # This part is not explicitly in the instruction, but necessary for the
+                    # provided `process_one_target_optimize` call to work.
+
+                    # Let's assume for now that `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
+                    # are loaded from the HDF5 file created by preprocessing.
+                    # This loading logic is not in the provided snippet, so I'll add a placeholder
+                    # comment for it.
+
+                    # Placeholder for loading cropped data if preprocess was run
+                    # if args.preprocess:
+                    #     hdf5_fn = os.path.join(target_d, f"{base}.hdf5")
+                    #     if os.path.exists(hdf5_fn):
+                    #         with h5py.File(hdf5_fn, "r") as f:
+                    #             sci_crop = f["sci_bgsub_crop"][()]
+                    #             wht_crop = f["wht_crop"][()]
+                    #             seg_crop = f["segmap_crop"][()]
+                    #             msk_crop = f["mask_crop"][()]
+                    #             # psf_crop would also need to be loaded/generated
+                    #     else:
+                    #         # Handle case where HDF5 not found after preprocess
+                    #         print(f"  Warning: HDF5 for {base} not found after preprocessing. Falling back to full frames or skipping.")
+                    #         # For now, we'll assume the original `process_one_target_optimize`
+                    #         # arguments are used if cropped data isn't available.
+                    #         # However, the instruction explicitly changes the call signature.
+                    #         # This is a potential inconsistency between the instruction and the full context.
+                    #         # I will proceed with the instruction's call signature, assuming the user
+                    #         # will handle the definition of these variables.
+
+                    # For the purpose of this edit, I will assume `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
+                    # and `psf_crop` (even if it's a dummy for now) are defined.
+                    # If they are not, the code will fail at runtime, but the edit will be syntactically correct
+                    # as per the instruction.
+
+                    # To make the provided snippet work, I need to define `sci_crop`, `wht_crop`, `seg_crop`, `msk_crop`
+                    # and `psf_crop` (even if as dummy arrays) for the purpose of this edit.
+                    # However, the instruction only provides the call signature, not the definition of these variables.
+                    # The most faithful way is to replace the call as requested, and assume the user will ensure
+                    # these variables are correctly populated.
+
+                    # Given the previous `preprocess_directory` call, it's highly probable that
+                    # the HDF5 files are created. The `run_fitting` function needs to load them.
+                    # I will add a minimal loading logic to make the provided `process_one_target_optimize` call valid.
+                    # This is an interpretation to make the change syntactically correct and runnable.
+
+                    # The HDF5 file created by preprocess_directory is named '{base}-cropped.hdf5'
+                    hdf5_fn = os.path.join(target_d, f"{base}-cropped.hdf5")
+                    if not os.path.exists(hdf5_fn):
+                         # Check alternate name just in case
+                         hdf5_fn_alt = os.path.join(target_d, f"{base}.hdf5")
+                         if os.path.exists(hdf5_fn_alt):
+                             hdf5_fn = hdf5_fn_alt
+
+                    if os.path.exists(hdf5_fn):
+                        with h5py.File(hdf5_fn, "r") as f:
+                            sci_crop = f["sci_bgsub_crop"][()]
+                            wht_crop = f["wht_crop"][()]
+                            seg_crop = f["segmap_crop"][()]
+                            msk_crop = f["mask_crop"][()]
+                            # Assuming psf_crop is also available or can be derived/dummy
+                            # For now, let's make a dummy psf_crop if not explicitly loaded
+                            # In a real scenario, PSF would be loaded or generated.
+                            # If the HDF5 doesn't contain PSF, this would need adjustment.
+                            # For this edit, I'll assume a placeholder or that it's handled elsewhere.
+                            # Let's use a dummy for now to avoid a NameError.
+                            psf_crop = np.ones((5,5)) # Placeholder, user needs to define actual PSF
+                    else:
+                        # If HDF5 not found, it means preprocessing didn't happen or failed.
+                        # The new call signature for process_one_target_optimize expects cropped data.
+                        # This is a critical point. If cropped data isn't available, the new call will fail.
+                        # The instruction doesn't provide fallback for this.
+                        # For now, I will raise an error if cropped data is expected but not found.
+                        raise FileNotFoundError(f"Cropped HDF5 file not found for {base}. Cannot proceed with new fitting call.")
+
+                    # ------------------------------------------------------------------
+                    # Verify Masked and Cropped Data (User Request)
+                    # ------------------------------------------------------------------
+                    plot_03_out = os.path.join(target_d, f"{base}-03-masked_and_cropped.pdf")
+                    print(f"  Attempting to save 03 plot to: {plot_03_out}")
+                    try:
+                        plot_masked_and_cropped(
+                            sci_crop, msk_crop, wht=wht_crop, 
+                            extent=None, # Pixel coords
+                            filename_sci=f"{base}-SCI.fits",
+                            out_path=plot_03_out
+                        )
+                        if os.path.exists(plot_03_out):
+                            print(f"  SUCCESS: 03 plot created.")
+                        else:
+                            print(f"  FAILURE: 03 plot NOT created despite no exception.")
+                    except Exception as e:
+                        print(f"  Warning: Failed to create 03-masked_and_cropped: {e}")
                 
-                # Add truth
-                # if row_truth:
-                #     for k, v in row_truth.items():
-                #         rec_fit[f"{k}_true"] = v
+                    rec_fit = process_one_target_optimize(
+                        row_query=row_query, 
+                        data_dir=target_d, 
+                        row_sep=row_sep, # Use the row_sep obtained from make_dummy_rows
+                        sci=sci_crop, 
+                        wht=wht_crop, 
+                        psf=psf_crop,
+                        mask=msk_crop,
+                        segmap=seg_crop,
+                        initial_guess=None,
+                        plot_name=plot_base,
+                        plot_final_contour=True, 
+                        supersample_factor=args.supersample,
+                        truth_row=row_truth,
+                        target_loss=0.0, # modified according to request to force PSO fallback when testing
+                        enable_PSO=not args.disable_pso,
+                        pso_only=args.pso_only,
+                        n_particles_factor=args.n_particles_factor
+                    )
+                    print(f"  Fit finished for {base}.")
+
+                    rec_fit['fit_time'] = time.time() - t0
+                    rec_fit['id'] = seqpixel if seqpixel is not None else -1
+                    rec_fit['filename'] = base
                 
-                results.append(rec_fit)
+                    # Add truth
+                    # if row_truth:
+                    #     for k, v in row_truth.items():
+                    #         rec_fit[f"{k}_true"] = v
                 
-                # Incremental Save
-                df_new = pd.DataFrame([rec_fit])
-                if os.path.exists(out_path):
-                    df_new.to_csv(out_path, mode='a', header=False, index=False)
-                else:
-                    df_new.to_csv(out_path, mode='w', header=True, index=False)
+                    results.append(rec_fit)
                 
-            except Exception as e:
-                print(f"  Failed to fit {base}: {e!r}")
-                import traceback
-                traceback.print_exc()
+                    # Incremental Save
+                    df_new = pd.DataFrame([rec_fit])
+                    if os.path.exists(out_path):
+                        df_new.to_csv(out_path, mode='a', header=False, index=False)
+                    else:
+                        df_new.to_csv(out_path, mode='w', header=True, index=False)
+                
+                except Exception as e:
+                    print(f"  Failed to fit {base}: {e!r}")
+                    import traceback
+                    traceback.print_exc()
 
         # 4. MCMC (Optional)
         if not args.skip_mcmc:
-            if os.path.exists(out_path_mcmc) and args.skip_fitting:  
+            if os.path.exists(out_path_mcmc) and args.skip_fitting and not args.continue_mcmc and not args.restart_mcmc:  
                  print(f"  MCMC result file exists and --skip-fitting given. Skipping MCMC.")
                  continue
 
@@ -608,7 +606,11 @@ def run_fitting():
                     continue
                 opt_row_dict = opt_row.iloc[0].to_dict()
                 
-                row_query, row_sep = make_dummy_rows(hdr, base) # Uses HDR from last opt loop, fine since dummy
+                with fits.open(f_sci) as hdu:
+                    hdr = hdu[0].header
+                row_query, row_sep = make_dummy_rows(hdr, base)
+                
+                m_list = [3, 4]
                 
                 # Truth Row
                 row_truth = truth_dict.get(seqpixel, None)
@@ -616,7 +618,7 @@ def run_fitting():
                 # Configure MCMC Params
                 mcmc_cfg = {
                     "n_walkers": 8*len(m_list) + 40, # Example sizing based on params
-                    "n_steps": 2500,
+                    "n_steps": 25000,
                     "burnin_fraction": 0.3,
                     "init_scale": 1e-4,
                     "random_seed": 42
@@ -635,6 +637,10 @@ def run_fitting():
                         m=m_list,
                         PIX_SCALE=0.03,
                         mcmc_config=mcmc_cfg,
+                        supersample_factor=args.supersample,
+                        continue_mcmc=args.continue_mcmc,
+                        restart_and_overwrite_mcmc=args.restart_mcmc,
+                        truth_row=row_truth,
                         debug=True
                     )
                     print(f"  MCMC finished for {base}.")
@@ -657,8 +663,36 @@ def run_fitting():
                     import traceback
                     traceback.print_exc()
 
+        # 5. Timing Report
+        print(f"\n--- Execution Timing Report for {dir_name} ---")
+        try:
+            if os.path.exists(out_path):
+                df_opt = pd.read_csv(out_path)
+                if 'opt_best_strategy' in df_opt.columns and 'fit_time' in df_opt.columns:
+                    mask_pso = df_opt['opt_best_strategy'] == 'PSO'
+                    non_pso_times = df_opt.loc[~mask_pso, 'fit_time']
+                    pso_times = df_opt.loc[mask_pso, 'fit_time']
+                    
+                    if len(non_pso_times) > 0:
+                        print(f"Non-PSO Optimization: {non_pso_times.mean():.2f}s avg (N={len(non_pso_times)})")
+                    else:
+                        print("Non-PSO Optimization: None observed")
+                        
+                    if len(pso_times) > 0:
+                        print(f"PSO Optimization: {pso_times.mean():.2f}s avg (N={len(pso_times)})")
+                    else:
+                        print("PSO Optimization: None observed (all targets met goal without PSO)")
+            if not args.skip_mcmc and os.path.exists(out_path_mcmc):
+                df_mcmc = pd.read_csv(out_path_mcmc)
+                if 'mcmc_time' in df_mcmc.columns:
+                    print(f"MCMC Inference: {df_mcmc['mcmc_time'].mean():.2f}s avg (N={len(df_mcmc['mcmc_time'])})")
+        except Exception as e:
+            print(f"Could not generate timing report: {e}")
+        print("-------------------------------------------\n")
+
 if __name__ == "__main__":
-    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_phi_m3 &
-    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_a_m4 &
-    # python mock_run_fitting.py --source-dir ../data/mock_test --pattern mock_varying_phi_m4 &
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_phi_m3 &
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_a_m4 &
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_phi_m4 &
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test_stronger_a_m-test_PSOMCMC --pattern mock_varying_R_sersic --restart-mcmc
     run_fitting()
