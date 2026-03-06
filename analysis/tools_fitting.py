@@ -1191,28 +1191,36 @@ def process_one_target_mcmc(
         initial_state = None
         print(f"  Resuming MCMC for {seqid_str} from step {backend.iteration}...")
         
-    for sample in sampler.sample(initial_state, iterations=max_steps, progress=True):
-        if sampler.iteration % check_interval == 0:
-            try:
-                # Compute tau with tolerance=0 so it doesn't crash if chain is too short
-                tau = sampler.get_autocorr_time(tol=0)
-                
-                # Check convergence
-                converged = np.all(tau * 100 < sampler.iteration)
-                converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
-                if converged:
-                    print(f"  Convergence reached at step {sampler.iteration}!")
-                    break
-                old_tau = tau
-            except emcee.autocorr.AutocorrError:
-                # Not enough steps to estimate tau reliably
-                pass
+    try:
+        if max_steps > 0:
+            for sample in sampler.sample(initial_state, iterations=max_steps, progress=True):
+                if sampler.iteration % check_interval == 0:
+                    try:
+                        # Compute tau with tolerance=0 so it doesn't crash if chain is too short
+                        tau = sampler.get_autocorr_time(tol=0)
+                        
+                        # Check convergence
+                        converged = np.all(tau * 100 < sampler.iteration)
+                        converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+                        if converged:
+                            print(f"  Convergence reached at step {sampler.iteration}!")
+                            break
+                        old_tau = tau
+                    except emcee.autocorr.AutocorrError:
+                        # Not enough steps to estimate tau reliably
+                        pass
+        else:
+            print("  Skipping additional sampling steps (max_steps=0). Extracting backend.")
+    except Exception as e:
+        print(f"  MCMC sampling aborted/failed (Error: {e}). Proceeding to extract from existing backend...")
             
     mcmc_time = time.time() - t0
     if not converged:
         print(f"  MCMC stopped at max {sampler.iteration} steps without fully satisfying convergence criteria.")
 
     # Determine Burn-in using Auto-correlation time
+    burnin = 0
+    thin = 1
     try:
         tau = sampler.get_autocorr_time(tol=0)
         burnin = int(2 * np.max(tau))
@@ -1222,10 +1230,11 @@ def process_one_target_mcmc(
             burnin = int(mcmc_config.get('burnin_fraction', 0.3) * sampler.iteration)
     except Exception as e:
         print(f"  Autocorrelation warning: {e}. Using fixed fraction.")
-        burnin = int(mcmc_config.get('burnin_fraction', 0.3) * sampler.iteration)
-        thin = 1
-        
-    flat_samples = sampler.get_chain(discard=burnin, thin=thin, flat=True)
+    try:
+        flat_samples = backend.get_chain(discard=burnin, thin=thin, flat=True)
+    except AttributeError:
+        print("  Error: MCMC backend is empty. Cannot extract parameters.")
+        raise RuntimeError("Empty MCMC backend.")
     
     # Get parameter names
     param_names = ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell']
@@ -1238,7 +1247,7 @@ def process_one_target_mcmc(
         import corner
         # Trace Plot
         # Get chain with unflattened shape (n_steps, n_walkers, dim)
-        chain = sampler.get_chain()
+        chain = backend.get_chain()
         fig_trace, axes_trace = plt.subplots(dim, 1, figsize=(10, 1.5 * dim), sharex=True)
         max_tau_str = f"{np.max(tau):.1f}" if 'tau' in locals() and hasattr(tau, '__iter__') else "unknown"
         fig_trace.suptitle(f"MCMC Trace (max tau: {max_tau_str}, burn-in: {burnin}, fully-converged: {converged})", fontsize=14)
@@ -1314,6 +1323,30 @@ def process_one_target_mcmc(
     chi2_final = reduced_chi_squared(sci_bgsub, wht, mod_final, dim, exptime, mask=mask)
     
     rec['loss_mcmc_final'] = chi2_final
+    
+    # Extract MCMC loss range
+    try:
+        log_probs = backend.get_log_prob(discard=burnin, thin=thin, flat=True)
+        # log_prob = -0.5 * chi2 + const 
+        # (Assuming uniform priors where valid, this is mostly the likelihood)
+        # Better yet, just compute exact chi2: chi2 = -2 * log_prob
+        if mask is not None:
+            valid_pixels = np.sum(~mask)
+        else:
+            valid_pixels = sci_bgsub.size
+        dof = valid_pixels - dim
+        chi2_samples = -2.0 * log_probs
+        reduced_chi2_samples = chi2_samples / dof
+        
+        loss_mcmc_16 = np.percentile(reduced_chi2_samples, 16)
+        loss_mcmc_84 = np.percentile(reduced_chi2_samples, 84)
+        
+        rec['loss_mcmc_16'] = loss_mcmc_16
+        rec['loss_mcmc_84'] = loss_mcmc_84
+    except Exception as e:
+        print(f"  Warning: could not compute MCMC loss range: {e}")
+        rec['loss_mcmc_16'] = np.nan
+        rec['loss_mcmc_84'] = np.nan
     
     p_best_flat = {}
     p_unc_flat = {}

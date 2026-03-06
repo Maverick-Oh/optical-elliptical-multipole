@@ -299,10 +299,7 @@ def run_fitting():
     parser.add_argument("--mcmc-only", action="store_true", help="Run MCMC inference only (requires fitting results)")
     parser.add_argument("--continue-mcmc", action="store_true", help="Continue MCMC from existing HDF5 backend")
     parser.add_argument("--restart-mcmc", action="store_true", help="Restart MCMC overwriting existing HDF5 backend")
-    parser.add_argument("--pso-only", action="store_true", help="Run *only* PSO (skip SLSQP, L-BFGS-B, trust-constr)")
-    parser.add_argument("--disable-pso", action="store_true", help="Disable PSO fallback on optimization failure")
-    parser.add_argument("--n-particles-factor", type=int, default=4, help="PSO particles = factor * n_params")
-    parser.add_argument("--pso-cores", type=int, default=1, help="Number of CPU cores for PSO (currently forced to 1 internally for safety but flag exists)")
+    parser.add_argument("--mcmc-steps", type=int, default=25000, help="Number of MCMC steps. Set to 0 to just extract results from existing backend.")
     args = parser.parse_args()
 
     if args.out_dir is None:
@@ -536,10 +533,7 @@ def run_fitting():
                         plot_final_contour=True, 
                         supersample_factor=args.supersample,
                         truth_row=row_truth,
-                        target_loss=0.0, # modified according to request to force PSO fallback when testing
-                        enable_PSO=not args.disable_pso,
-                        pso_only=args.pso_only,
-                        n_particles_factor=args.n_particles_factor
+                        target_loss=0.0 # modified according to request to force PSO fallback when testing
                     )
                     print(f"  Fit finished for {base}.")
 
@@ -618,7 +612,7 @@ def run_fitting():
                 # Configure MCMC Params
                 mcmc_cfg = {
                     "n_walkers": 8*len(m_list) + 40, # Example sizing based on params
-                    "n_steps": 25000,
+                    "n_steps": args.mcmc_steps,
                     "burnin_fraction": 0.3,
                     "init_scale": 1e-4,
                     "random_seed": 42
@@ -668,20 +662,13 @@ def run_fitting():
         try:
             if os.path.exists(out_path):
                 df_opt = pd.read_csv(out_path)
-                if 'opt_best_strategy' in df_opt.columns and 'fit_time' in df_opt.columns:
-                    mask_pso = df_opt['opt_best_strategy'] == 'PSO'
-                    non_pso_times = df_opt.loc[~mask_pso, 'fit_time']
-                    pso_times = df_opt.loc[mask_pso, 'fit_time']
+                if 'fit_time' in df_opt.columns:
+                    non_pso_times = df_opt['fit_time']
                     
                     if len(non_pso_times) > 0:
-                        print(f"Non-PSO Optimization: {non_pso_times.mean():.2f}s avg (N={len(non_pso_times)})")
+                        print(f"Optimization: {non_pso_times.mean():.2f}s avg (N={len(non_pso_times)})")
                     else:
-                        print("Non-PSO Optimization: None observed")
-                        
-                    if len(pso_times) > 0:
-                        print(f"PSO Optimization: {pso_times.mean():.2f}s avg (N={len(pso_times)})")
-                    else:
-                        print("PSO Optimization: None observed (all targets met goal without PSO)")
+                        print("Optimization: None observed")
             if not args.skip_mcmc and os.path.exists(out_path_mcmc):
                 df_mcmc = pd.read_csv(out_path_mcmc)
                 if 'mcmc_time' in df_mcmc.columns:

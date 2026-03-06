@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import argparse
+import warnings
 
 # Configuration
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,10 +36,12 @@ def validate_results(data_dir):
         
         for suffix, best_suffix, err_suffix in [
             ("", "_best", "_err"), 
-            ("_pso", "_pso_best", "_pso_err"), 
             ("_mcmc", "_mcmc_best", "_mcmc_err")
         ]:
-            fit_file = os.path.join(d, "fitting_results.csv")
+            if suffix == "_mcmc":
+                fit_file = os.path.join(d, "fitting_results_mcmc.csv")
+            else:
+                fit_file = os.path.join(d, "fitting_results.csv")
             
             if not truth_file or not os.path.exists(truth_file) or not os.path.exists(fit_file):
                 print(f"    Missing truth or fit files for {param_name} {suffix}, skipping.")
@@ -124,7 +127,8 @@ def validate_results(data_dir):
                 if x_max != x_min:
                     span = x_max - x_min
                 else:
-                    raise ValueError("x_max and x_min are equal, cannot compute span")
+                    warnings.warn("x_max and x_min are equal, cannot compute span; set as 1 by default")
+                    span = 1.0
             
                 # Use a generous buffer to include "good" recovery but exclude catastrophic failures
                 # Or use percentiles of y? 
@@ -223,15 +227,29 @@ def validate_results(data_dir):
             chi2_col = None
             if 'loss_final' in merged.columns: chi2_col = 'loss_final'
             elif 'chi2_reduced_final' in merged.columns: chi2_col = 'chi2_reduced_final'
-        
+            elif 'loss_mcmc_final' in merged.columns: chi2_col = 'loss_mcmc_final'
+            else: raise ValueError("chi2_col not assigned!")
+
             if chi2_col:
-                ax.plot(merged.get(col_true, np.arange(len(merged))), merged[chi2_col], 's', color='r', alpha=0.6)
-                ax.axhline(1.0, color='k', linestyle=':')
+                x_varied = merged.get(col_true, np.arange(len(merged)))
+                ax.axhline(1.0, color='k', linestyle=':', label='reduced chi^2 =1')
+                ax.axhline(2.0, color='k', linestyle='--', label='reduced chi^2 =2')
+                
+                if suffix == '_mcmc' and 'loss_mcmc_16' in merged.columns and 'loss_mcmc_84' in merged.columns:
+                    y_err_lower = merged[chi2_col] - merged['loss_mcmc_16']
+                    y_err_upper = merged['loss_mcmc_84'] - merged[chi2_col]
+                    y_err_lower = np.maximum(y_err_lower, 0)
+                    y_err_upper = np.maximum(y_err_upper, 0)
+                    ax.errorbar(x_varied, merged[chi2_col], yerr=[y_err_lower, y_err_upper], fmt='s', color='r', alpha=0.6, capsize=3, label='MCMC Loss (16-84%)')
+                else:
+                    ax.plot(x_varied, merged[chi2_col], 's', color='r', alpha=0.6)
+                
                 ax.set_xlabel(f"True {param_name}")
                 ax.set_ylabel(chi2_col)
                 ax.set_title("Goodness of Fit (final reduced chi^2)")
                 ax.set_yscale('log')
-                ax.set_ylim(0.5, 2)
+                ax.set_ylim(0.5, 3.0)
+                ax.legend()
 
             # Helper function to add vertical lines and seqid labels
             def add_vlines_and_seqid(ax, x_data, y_data, seqids):
@@ -378,30 +396,72 @@ def validate_results(data_dir):
         
             if available_mps and col_true in merged.columns:
                 # Use the VARIED parameter as x-axis (not always R_sersic!)
-                fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
+                fig2, axes2 = plt.subplots(1, 5, figsize=(30, 5))
             
-                axes2[0].axhline(np.pi/6, color='lightgreen', linestyle='--', alpha=0.5, label='$\pi/6$')            
-                axes2[0].axhline(np.pi/8, color='darkgreen', linestyle='--', alpha=0.5, label='$\pi/8$')
-                axes2[0].axhline(0.005, color='blue', linestyle='-', alpha=0.5, label='0.005')
+                styles = {
+                    'a_m3': {'fmt': '^', 'color': 'lightblue', 'size': 7},
+                    'a_m4': {'fmt': 's', 'color': 'darkblue', 'size': 5},
+                    'phi_m3': {'fmt': '^', 'color': 'lightgreen', 'size': 7},
+                    'phi_m4': {'fmt': 's', 'color': 'darkgreen', 'size': 5}
+                }
+
+                # Plot 0: True vs Inferred for a_m3, a_m4
+                ax0 = axes2[0]
+                a_m_mps = [m for m in available_mps if 'a_m' in m]
+                amp_min = -0.02
+                amp_max = 0.02
+                for mp in a_m_mps:
+                    err_c = f"{mp}_err"
+                    rec_c = f"{mp}_rec"
+                    true_c = f"{mp}_true"
+                    if rec_c in merged.columns and true_c in merged.columns and err_c in merged.columns:
+                        s = styles.get(mp, {'fmt': 'o', 'color': 'k', 'size': 5})
+                        ax0.errorbar(merged[true_c], merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
+                        # Extend limits if values are out of bounds
+                        amp_min = min(amp_min, merged[true_c].min(), merged[rec_c].min())
+                        amp_max = max(amp_max, merged[true_c].max(), merged[rec_c].max())
+                
+                ax0.plot([amp_min, amp_max], [amp_min, amp_max], 'k--', alpha=0.5, label='1:1', zorder=0)
+                ax0.set_xlim(amp_min, amp_max)
+                ax0.set_ylim(amp_min, amp_max)
+                ax0.set_xlabel('True Value')
+                ax0.set_ylabel('Inferred Value')
+                ax0.set_title("Multipole Amplitudes")
+                ax0.legend()
+
+                # Plot 1: True vs Inferred for phi_m3, phi_m4
+                ax1 = axes2[1]
+                phi_m_mps = [m for m in available_mps if 'phi_m' in m]
+                ang_min = -np.pi/6
+                ang_max = np.pi/6
+                for mp in phi_m_mps:
+                    err_c = f"{mp}_err"
+                    rec_c = f"{mp}_rec"
+                    true_c = f"{mp}_true"
+                    if rec_c in merged.columns and true_c in merged.columns and err_c in merged.columns:
+                        s = styles.get(mp, {'fmt': 'o', 'color': 'k', 'size': 5})
+                        ax1.errorbar(merged[true_c], merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
+                        # Extend limits if values are out of bounds
+                        ang_min = min(ang_min, merged[true_c].min(), merged[rec_c].min())
+                        ang_max = max(ang_max, merged[true_c].max(), merged[rec_c].max())
+                
+                ax1.plot([ang_min, ang_max], [ang_min, ang_max], 'k--', alpha=0.5, label='1:1', zorder=0)
+                ax1.set_xlim(ang_min, ang_max)
+                ax1.set_ylim(ang_min, ang_max)
+                ax1.set_xlabel('True Value')
+                ax1.set_ylabel('Inferred Value')
+                ax1.set_title("Multipole Angles")
+                ax1.legend()
+
+                axes2[2].axhline(np.pi/6, color='lightgreen', linestyle='--', alpha=0.5, label='$\pi/6$')            
+                axes2[2].axhline(np.pi/8, color='darkgreen', linestyle='--', alpha=0.5, label='$\pi/8$')
+                axes2[2].axhline(0.005, color='blue', linestyle='-', alpha=0.5, label='0.005')
 
                 x_varied = merged[col_true]
                 xlab = f'True {param_name}'
                 
-                # Plot 1: Sigma(multipoles) vs Varied Parameter
-                ax = axes2[0]
-            
-                # Custom markers
-                # a_m3: light blue triangle_up
-                # a_m4: dark blue square
-                # phi_m3: light green triangle_up
-                # phi_m4: dark green square
-            
-                styles = {
-                    'a_m3': {'fmt': '^', 'color': 'lightblue', 'size': 10},
-                    'a_m4': {'fmt': 's', 'color': 'darkblue', 'size': 5},
-                    'phi_m3': {'fmt': '^', 'color': 'lightgreen', 'size': 10},
-                    'phi_m4': {'fmt': 's', 'color': 'darkgreen', 'size': 5}
-                }
+                # Plot 2: Sigma(multipoles) vs Varied Parameter
+                ax = axes2[2]
             
                 for mp in available_mps:
                     err_c = f"{mp}_err"
@@ -440,14 +500,24 @@ def validate_results(data_dir):
                     if err_c in merged.columns:
                         add_vlines_and_seqid(ax, x_varied, merged[err_c], merged['seqid'])
 
-                # Plot 2: Chi2 vs Varied Parameter
-                ax = axes2[1]
+                # Plot 3: Chi2 vs Varied Parameter
+                ax = axes2[3]
                 min_chi2_lim = 0.5
                 max_chi2_lim = 3.0
                 if chi2_col:
                     ax.axhline(1.0, color='k', linestyle=':', label='reduced chi^2 =1')
                     ax.axhline(2.0, color='k', linestyle='--', label='reduced chi^2 =2')
-                    ax.plot(x_varied, merged[chi2_col], 'o', color='r', alpha=0.5)
+                    
+                    if suffix == '_mcmc' and 'loss_mcmc_16' in merged.columns and 'loss_mcmc_84' in merged.columns:
+                        y_err_lower = merged[chi2_col] - merged['loss_mcmc_16']
+                        y_err_upper = merged['loss_mcmc_84'] - merged[chi2_col]
+                        # Ensure no negative errors due to precision
+                        y_err_lower = np.maximum(y_err_lower, 0)
+                        y_err_upper = np.maximum(y_err_upper, 0)
+                        ax.errorbar(x_varied, merged[chi2_col], yerr=[y_err_lower, y_err_upper], fmt='o', color='r', alpha=0.5, capsize=3, label='MCMC Loss (16-84%)')
+                    else:
+                        ax.plot(x_varied, merged[chi2_col], 'o', color='r', alpha=0.5)
+                        
                     ax.set_xlabel(xlab)
                     ax.set_ylabel("Reduced Chi^2")
                     ax.set_title(f"Fit Quality vs {param_name}")
@@ -463,11 +533,11 @@ def validate_results(data_dir):
                     print('debug')
 
                 if col_true in ['amplitude_true', 'background_true']:
-                    axes2[0].set_xscale('log')
-                    axes2[1].set_xscale('log')
+                    axes2[2].set_xscale('log')
+                    axes2[3].set_xscale('log')
 
-                # Plot 3: Outliers details
-                ax = axes2[2]
+                # Plot 4: Outliers details
+                ax = axes2[4]
                 ax.set_axis_off()
             
                 # Identify outliers for Multipoles
@@ -549,7 +619,7 @@ if __name__ == "__main__":
     # usage example:
     # python mock_validate.py --data-dir ../data/mock_test
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_weak_a_m", help="Directory containing mock_varying_* folders")
+    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_stronger_a_m-test_PSOMCMC", help="Directory containing mock_varying_* folders")
     args = parser.parse_args()
     
     if os.path.exists(args.data_dir):
