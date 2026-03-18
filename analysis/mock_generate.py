@@ -22,7 +22,7 @@ WHT_VALUE = 1.0 / (RMS_NOISE**2)
 # We must adjust grid size dynamically.
 
 DEFAULT_PARAMS = {
-    'n_sersic': 4.0,
+    'n_sersic': 2.0,
     'R_sersic': 0.2,
     'amplitude': 0.03,
     'q': 0.8,

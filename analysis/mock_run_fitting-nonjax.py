@@ -291,16 +291,27 @@ def run_fitting():
     default=None, # if None, it will do everything; else, give something like 'mock_varying_theta_ell', 
     help="Process only dirs matching pattern")
     parser.add_argument("--skip-preprocess", action="store_true", help="Skip SEP preprocessing/cropping")
-    parser.add_argument("--supersample", type=int, default=4, help="Supersampling factor for fitting (default 1)")
-    parser.add_argument("--source-dir", type=str, default='../data/mock_test_stronger_a_m', help="Directory containing source mock_varying_* folders (default: data/)")
+    parser.add_argument("--supersample", type=int, default=5, help="Supersampling factor for fitting (default 1)")
+    parser.add_argument("--source-dir", type=str, default='../data/mock_test_0306_R_Sersic_SS5', help="Directory containing source mock_varying_* folders (default: data/)")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory root (e.g. data/mock_fitting-0201-1)")
-    parser.add_argument("--skip-fitting", action="store_true", help="Skip optimization fitting")
+    parser.add_argument("--skip-optimization", action="store_true", help="Skip optimization fitting")
     parser.add_argument("--skip-mcmc", action="store_true", help="Skip MCMC inference")
     parser.add_argument("--mcmc-only", action="store_true", help="Run MCMC inference only (requires fitting results)")
     parser.add_argument("--continue-mcmc", action="store_true", help="Continue MCMC from existing HDF5 backend")
     parser.add_argument("--restart-mcmc", action="store_true", help="Restart MCMC overwriting existing HDF5 backend")
     parser.add_argument("--mcmc-steps", type=int, default=25000, help="Number of MCMC steps. Set to 0 to just extract results from existing backend.")
+    parser.add_argument("--mcmc-target-sid", type=int, default=4, help="Target source ID to process")
     args = parser.parse_args()
+    
+    # MANUAL OVERRIDES FOR ARGS FOR TESTING
+    # args.skip_preprocess = True
+    # args.skip_optimization = True
+    # args.skip_mcmc = True
+    # args.mcmc_only = True
+    # args.continue_mcmc = True
+    # args.restart_mcmc = False
+    # args.mcmc_steps = 10
+    # args.mcmc_target_sid = 4
 
     if args.out_dir is None:
         args.out_dir = args.source_dir
@@ -330,9 +341,9 @@ def run_fitting():
     print(f"Found {len(source_dirs)} mock directories to process.")
     
     # User Request: Skip mock_varying_R_sersic for 9x run due to size
-    if args.supersample > 4: # Heuristic for high supersampling or just specific request
-         source_dirs = [d for d in source_dirs if "mock_varying_R_sersic" not in d]
-         print(f"Skipping 'mock_varying_R_sersic' due to large image sizes (Remaining: {len(source_dirs)})")
+    # if args.supersample > 4: # Heuristic for high supersampling or just specific request
+    #      source_dirs = [d for d in source_dirs if "mock_varying_R_sersic" not in d]
+    #      print(f"Skipping 'mock_varying_R_sersic' due to large image sizes (Remaining: {len(source_dirs)})")
     
     # Progress bar for directories
     for src_d in tqdm(source_dirs, desc="Processing mock directories", unit="dir"):
@@ -378,13 +389,17 @@ def run_fitting():
         out_path = os.path.join(target_d, OUTPUT_FILENAME)
         out_path_mcmc = os.path.join(target_d, "fitting_results_mcmc.csv")
         
-        if os.path.exists(out_path) and (args.skip_fitting or args.mcmc_only):
+        if os.path.exists(out_path) and (args.skip_optimization or args.mcmc_only):
              print(f"  Result file exists. Skipping optimization fitting.")
-        elif not args.mcmc_only:
+        elif args.skip_optimization and not os.path.exists(out_path):
+             print(f"  --skip-optimization given but no result file found. Will run optimization.")
+        
+        if not args.mcmc_only:
             results = []
             
         # Progress bar for individual fits within each directory
-        if not (os.path.exists(out_path) and (args.skip_fitting or args.mcmc_only)) and not args.mcmc_only:
+        skip_condition = os.path.exists(out_path) and (args.skip_optimization or args.mcmc_only)
+        if not skip_condition and not args.mcmc_only:
             for f_sci in tqdm(fits_files, desc=f"  Fitting {dir_name}", unit="fit", leave=False):
                 base = os.path.basename(f_sci).replace("-SCI.fits", "")
                 f_wht = os.path.join(target_d, f"{base}-WHT.fits")
@@ -533,7 +548,7 @@ def run_fitting():
                         plot_final_contour=True, 
                         supersample_factor=args.supersample,
                         truth_row=row_truth,
-                        target_loss=0.0 # modified according to request to force PSO fallback when testing
+                        target_loss=1.2
                     )
                     print(f"  Fit finished for {base}.")
 
@@ -562,10 +577,6 @@ def run_fitting():
 
         # 4. MCMC (Optional)
         if not args.skip_mcmc:
-            if os.path.exists(out_path_mcmc) and args.skip_fitting and not args.continue_mcmc and not args.restart_mcmc:  
-                 print(f"  MCMC result file exists and --skip-fitting given. Skipping MCMC.")
-                 continue
-
             if not os.path.exists(out_path):
                 print(f"  Cannot run MCMC: No optimization results ({out_path}) found.")
                 continue
@@ -582,12 +593,22 @@ def run_fitting():
             
             # Sub-loop for individual MCMC processing
             for f_sci in tqdm(fits_files, desc=f"  MCMC Inferring {dir_name}", unit="fit", leave=False):
+                sid = int(os.path.basename(f_sci).split("-")[0]) # extract sid from f_sci
+                if args.mcmc_target_sid is not None and sid != args.mcmc_target_sid:
+                    continue
+                else:
+                    pass
                 base = os.path.basename(f_sci).replace("-SCI.fits", "")
                 
                 try:
                     seqpixel = int(base)
                 except ValueError:
                     print(f"  Warning: Cannot parse {base} to int. Skipping MCMC.")
+                    continue
+                
+                backend_file = os.path.join(target_d, f"{seqpixel}-mcmc_backend.h5")
+                if os.path.exists(backend_file) and not args.continue_mcmc and not args.restart_mcmc:
+                    print(f"  MCMC backend file exists for {base}: {backend_file}.\n  Skipping MCMC. To continue, use --continue-mcmc or --restart-mcmc.")
                     continue
                 
                 # Retrieve opt row
@@ -678,8 +699,7 @@ def run_fitting():
         print("-------------------------------------------\n")
 
 if __name__ == "__main__":
-    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_phi_m3 &
-    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_a_m4 &
-    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test --pattern mock_varying_phi_m4 &
     # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test_stronger_a_m-test_PSOMCMC --pattern mock_varying_R_sersic --restart-mcmc
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test_0309_R_Sersic_w_n_sersic_2_SS3 --pattern mock_varying_R_sersic --skip-mcmc --supersample 3
+    # python mock_run_fitting-nonjax.py --source-dir ../data/mock_test_0309_R_Sersic_w_n_sersic_3_SS3 --pattern mock_varying_R_sersic --skip-mcmc --supersample 3
     run_fitting()

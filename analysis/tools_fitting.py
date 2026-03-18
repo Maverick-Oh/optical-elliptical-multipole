@@ -494,7 +494,7 @@ def process_one_target_optimize(
         truth_row=None,
         plot_name=None,
         initial_guess=None, # Added argument
-        enable_PSO=True,
+        enable_PSO=False,
         pso_only=False,
         n_particles_factor=4 # Number of PSO particles = factor * n_params
     ):
@@ -1060,7 +1060,7 @@ def process_one_target_mcmc(
     if mcmc_config is None:
         mcmc_config = {
             "n_walkers": 32,
-            "n_steps": 2000,
+            "n_steps": 4000,
             "burnin_fraction": 0.3,
             "init_scale": 1e-4,
             "random_seed": 42
@@ -1170,6 +1170,17 @@ def process_one_target_mcmc(
         backend.reset(n_walkers, dim)
     elif not continue_mcmc:
         backend.reset(n_walkers, dim)
+    else:
+        try:
+            if backend.iteration > 0:
+                n_walkers_backend, dim_backend = backend.shape
+                if dim != dim_backend:
+                    raise ValueError(f"incompatible input dimensions ({dim_backend}, {dim})")
+                if n_walkers != n_walkers_backend:
+                    print(f"  Adjusting n_walkers from {n_walkers} to {n_walkers_backend} to match backend.")
+                    n_walkers = n_walkers_backend
+        except AttributeError:
+            pass # shape might not be there if backend is empty
         
     sampler = emcee.EnsembleSampler(n_walkers, dim, log_prob, backend=backend)
     
@@ -1188,7 +1199,7 @@ def process_one_target_mcmc(
         initial_state = pos
         print(f"  Starting fresh MCMC for {seqid_str} with {n_walkers} walkers...")
     else:
-        initial_state = None
+        initial_state = sampler.get_last_sample()
         print(f"  Resuming MCMC for {seqid_str} from step {backend.iteration}...")
         
     try:
@@ -1200,8 +1211,10 @@ def process_one_target_mcmc(
                         tau = sampler.get_autocorr_time(tol=0)
                         
                         # Check convergence
-                        converged = np.all(tau * 100 < sampler.iteration)
-                        converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+                        min_independent_samples = 20 # at least 20 independent samples
+                        converged = np.all(tau * min_independent_samples < sampler.iteration)
+                        stable_fraction = 0.03 # 3 percent of change is okay
+                        converged &= np.all(np.abs(old_tau - tau) / tau < stable_fraction)
                         if converged:
                             print(f"  Convergence reached at step {sampler.iteration}!")
                             break
@@ -1212,6 +1225,8 @@ def process_one_target_mcmc(
         else:
             print("  Skipping additional sampling steps (max_steps=0). Extracting backend.")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"  MCMC sampling aborted/failed (Error: {e}). Proceeding to extract from existing backend...")
             
     mcmc_time = time.time() - t0

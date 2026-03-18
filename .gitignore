@@ -1,3 +1,5 @@
+*.bib
+ch4_optical_multipole.md
 *.log
 bench_out
 .vscode/

@@ -395,6 +395,9 @@ def validate_results(data_dir):
             # available_mps.sort() # such that it is in the order of a_m3, a_m4, phi_m3, and phi_m4
         
             if available_mps and col_true in merged.columns:
+                x_varied = merged[col_true]
+                xlab = f'True {param_name}'
+
                 # Use the VARIED parameter as x-axis (not always R_sersic!)
                 fig2, axes2 = plt.subplots(1, 5, figsize=(30, 5))
             
@@ -416,15 +419,17 @@ def validate_results(data_dir):
                     true_c = f"{mp}_true"
                     if rec_c in merged.columns and true_c in merged.columns and err_c in merged.columns:
                         s = styles.get(mp, {'fmt': 'o', 'color': 'k', 'size': 5})
-                        ax0.errorbar(merged[true_c], merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
+                        ax0.plot(x_varied, merged[true_c],'k--', label="True")
+                        ax0.errorbar(x_varied, merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
                         # Extend limits if values are out of bounds
-                        amp_min = min(amp_min, merged[true_c].min(), merged[rec_c].min())
-                        amp_max = max(amp_max, merged[true_c].max(), merged[rec_c].max())
+                        # amp_min = min(amp_min, merged[true_c].min(), merged[rec_c].min())
+                        # amp_max = max(amp_max, merged[true_c].max(), merged[rec_c].max())
                 
-                ax0.plot([amp_min, amp_max], [amp_min, amp_max], 'k--', alpha=0.5, label='1:1', zorder=0)
-                ax0.set_xlim(amp_min, amp_max)
-                ax0.set_ylim(amp_min, amp_max)
-                ax0.set_xlabel('True Value')
+                # ax0.plot([amp_min, amp_max], [amp_min, amp_max], 'k--', alpha=0.5, label='1:1', zorder=0)
+                # ax0.set_xlim(amp_min, amp_max)
+                # ax0.set_ylim(amp_min, amp_max)
+                # ax0.set_xlabel('True Value')
+                ax0.set_xlabel(xlab)
                 ax0.set_ylabel('Inferred Value')
                 ax0.set_title("Multipole Amplitudes")
                 ax0.legend()
@@ -440,15 +445,17 @@ def validate_results(data_dir):
                     true_c = f"{mp}_true"
                     if rec_c in merged.columns and true_c in merged.columns and err_c in merged.columns:
                         s = styles.get(mp, {'fmt': 'o', 'color': 'k', 'size': 5})
-                        ax1.errorbar(merged[true_c], merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
+                        ax1.plot(x_varied, merged[true_c],'k--', label="True")
+                        ax1.errorbar(x_varied, merged[rec_c], yerr=merged[err_c], fmt=s['fmt'], color=s['color'], label=mp, alpha=0.8, markersize=s['size'])
                         # Extend limits if values are out of bounds
-                        ang_min = min(ang_min, merged[true_c].min(), merged[rec_c].min())
-                        ang_max = max(ang_max, merged[true_c].max(), merged[rec_c].max())
+                        # ang_min = min(ang_min, merged[true_c].min(), merged[rec_c].min())
+                        # ang_max = max(ang_max, merged[true_c].max(), merged[rec_c].max())
                 
-                ax1.plot([ang_min, ang_max], [ang_min, ang_max], 'k--', alpha=0.5, label='1:1', zorder=0)
-                ax1.set_xlim(ang_min, ang_max)
-                ax1.set_ylim(ang_min, ang_max)
-                ax1.set_xlabel('True Value')
+                # ax1.plot([ang_min, ang_max], [ang_min, ang_max], 'k--', alpha=0.5, label='1:1', zorder=0)
+                # ax1.set_xlim(ang_min, ang_max)
+                # ax1.set_ylim(ang_min, ang_max)
+                # ax1.set_xlabel('True Value')
+                ax1.set_xlabel(xlab)
                 ax1.set_ylabel('Inferred Value')
                 ax1.set_title("Multipole Angles")
                 ax1.legend()
@@ -456,9 +463,6 @@ def validate_results(data_dir):
                 axes2[2].axhline(np.pi/6, color='lightgreen', linestyle='--', alpha=0.5, label='$\pi/6$')            
                 axes2[2].axhline(np.pi/8, color='darkgreen', linestyle='--', alpha=0.5, label='$\pi/8$')
                 axes2[2].axhline(0.005, color='blue', linestyle='-', alpha=0.5, label='0.005')
-
-                x_varied = merged[col_true]
-                xlab = f'True {param_name}'
                 
                 # Plot 2: Sigma(multipoles) vs Varied Parameter
                 ax = axes2[2]
@@ -619,7 +623,7 @@ if __name__ == "__main__":
     # usage example:
     # python mock_validate.py --data-dir ../data/mock_test
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_stronger_a_m-test_PSOMCMC", help="Directory containing mock_varying_* folders")
+    parser.add_argument("--data-dir", type=str, required=False, default="../data/mock_test_0309_R_Sersic_w_n_sersic_3_SS3", help="Directory containing mock_varying_* folders")
     args = parser.parse_args()
     
     if os.path.exists(args.data_dir):
