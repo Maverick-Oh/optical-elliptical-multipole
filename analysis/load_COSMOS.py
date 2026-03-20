@@ -41,7 +41,7 @@ print("DONE!")
 
 show_plot = False
 adql = """SELECT 
-TOP 200
+TOP 10000
 sequentialid, CAPAK_ID, acs_ident, ra, dec, type, 
 ACS_MU_CLASS, R50, ACS_X_IMAGE, ACS_Y_IMAGE,
 ACS_A_IMAGE, ACS_B_IMAGE, ACS_THETA_IMAGE, 
@@ -65,7 +65,7 @@ WHERE stellarity=0 AND type=1 AND ACS_MU_CLASS=1 ORDER BY R50 DESC
 
 # datetime_string = str(datetime.now()).replace(' ', '_').replace(':', '')
 # datetime_string = datetime_string[:datetime_string.find('.')]
-datetime_string = 'test7-big100'
+datetime_string = 'ALL'
 ignore_FITSFixedWarning = True
 
 data_dir = '../data'

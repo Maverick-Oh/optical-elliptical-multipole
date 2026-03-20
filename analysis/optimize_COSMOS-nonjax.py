@@ -1,278 +1,346 @@
-# run_cosmos_analysis.py
-import os, glob, warnings
+#!/usr/bin/env python3
+"""
+optimize_COSMOS-nonjax.py — Fit elliptical-multipole Sérsic profiles to COSMOS targets.
 
+Pipeline order:
+  1) load_COSMOS.py           → downloads FITS cutouts
+  2) preprocess_COSMOS_w_source_extractor.py → SEP preprocessing → {seqid}-cropped.hdf5
+  3) THIS SCRIPT              → optimisation → cosmos_optimization_result.csv
+
+Features:
+  • Sorted target selection with index slicing (--sorting-label, --select-ind-ini/fin)
+  • Supersampled model evaluation (--supersample, default 3)
+  • Multi-strategy optimisation (SLSQP → L-BFGS-B, early exit at --target-loss)
+  • Incremental + cumulative CSV saving
+  • Per-fit timing
+  • Parallel fitting via ProcessPoolExecutor (--n-workers)
+  Usage: python optimize_COSMOS-nonjax.py --data-dir ../data/HDUL_test7-big100 --n-workers 5 --skip-existing True --select-ind-fin 100
+  python optimize_COSMOS-nonjax.py --data-dir ../data/HDUL_test7-big100 --n-workers 5 --skip-existing --select-ind-fin 100
+"""
+
+import os, sys, glob, warnings, time, argparse
 import numpy as np
 import pandas as pd
-import time
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# ---------------------
+# project imports
+# ---------------------
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(HERE)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from tools_misc import elapsed_time_reporter, grab_matching_format
 from tools_fitting import process_one_target_optimize, _warn_and_write_missing
 
-# ---------------------------
-# small utilities
-# ---------------------------
 PIX_SCALE = 0.03  # arcsec / pixel
 
-# IN cosmos_sample*.csv, I can find
-# sequentialid, EXPTIME_SCI, EXPTIME_WHT
+# ============================================================
+#  Single-target worker (top-level for pickle-ability)
+# ============================================================
 
-# IN sep_summary*.csv, I can find
-# seqid, orientat, target_label, label (duplicate... lol), x, y, a, b, theta,
-
-# ---------------------------
-# driver
-# ---------------------------
-
-def run_cosmos_optimization(
-    data_dir,
-    query_csv_format,
-    *,
-    m_multipole=(3, 4),
-    plot_initial_contour=True,
-    plot_final_contour=True,
-    optimization_method='SLSQP',
-    fit_model=False,
-    top_n=5,
-    results_csv_name="cosmos_optimization_result.csv",
-    start_index=0,
-    start_seqid=None,
-    target_seqid_list=None,
-    skip_on_error=False,
-    errors_csv_name="__errors.csv",
-    debug=False,
-    verbose=False,
-    rerun_condition=None, # e.g. "loss_final > 1.0"
-    target_loss=1.0,
+def fit_one_target(
+    sid, data_dir, row_query_dict, row_sep_dict,
+    m_multipole, supersample, target_loss, opt_method,
+    plot_initial, plot_final, verbose, use_jax,
 ):
-    # 1) find query CSV file
-    # ... (lines omitted) ...
-    
-    # Actually I should use MultiReplace to target signature and the call site separately if they are far apart. 
-    # The signature is at line 42+.
-    # The call is at line 125+.
-    # I will replace signature first.
+    """
+    Fit a single target. Returns a dict (record).
+    Designed to be called from ProcessPoolExecutor.
+    """
+    import pandas as pd  # reimport inside worker
+    import time as _time
 
-    # 1) find query CSV file
-    query_csv_file = grab_matching_format(data_dir, query_csv_format) #grab the file that matches the given format
-    df_query = pd.read_csv(query_csv_file) #
+    # Reconstruct pandas Series from dicts
+    row_query = pd.Series(row_query_dict)
+    row_sep = pd.Series(row_sep_dict)
 
-    # find SEP file
-    sep_summary_file = grab_matching_format(data_dir, "sep_summary*.csv")
-    df_sep = pd.read_csv(sep_summary_file)
-    # keys: 'seqid', 'image_width', 'image_height', 'q', 'theta', 'orientat',
-    #        'target_label', 'deblend_nthresh', 'deblend_cont',
-    #        'detect_thresh_sigma', 'total_flux', 'thresh', 'npix', 'tnpix', 'xmin',
-    #        'xmax', 'ymin', 'ymax', 'x', 'y', 'x2', 'y2', 'xy', 'errx2', 'erry2',
-    #        'errxy', 'a', 'b', 'cxx', 'cyy', 'cxy', 'cflux', 'flux', 'cpeak',
-    #        'peak', 'xcpeak', 'ycpeak', 'xpeak', 'ypeak', 'flag', 'R50', 'A50',
-    #        'B50', 'R90', 'A90', 'B90', 'R99', 'A99', 'B99', 'BKG_sigma_clip',
-    #        'RMS_sigma_clip', 'label'
+    t0 = _time.perf_counter()
+    try:
+        rec = process_one_target_optimize(
+            row_query, data_dir, row_sep,
+            opt_method=opt_method,
+            m=list(m_multipole),
+            plot_initial_contour=plot_initial,
+            plot_final_contour=plot_final,
+            verbose=verbose,
+            target_loss=target_loss,
+            supersample_factor=supersample,
+            truth_row=None,
+            use_jax=use_jax,
+        )
+        rec['fit_time'] = _time.perf_counter() - t0
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        rec = dict(
+            sequentialid=int(sid),
+            loss_initial=np.nan, loss_final=np.nan,
+            error=f"{type(e).__name__}: {e}",
+            fit_time=_time.perf_counter() - t0,
+        )
+    return rec
 
-    # figure out where to start based on SEP csv file (which might have less than query file, due to manual exceptions)
-    if start_seqid is not None:
-        seq_col = df_sep["seqid"].astype(str).tolist()
-        if str(start_seqid) in seq_col:
-            if start_index is not None:
-                warnings.warn(f"start_index is given as {start_index}, but start_seqid is given as {start_seqid}. "
-                              f"start_index will be ignored.")
-            start_index = seq_col.index(str(start_seqid))
+
+# ============================================================
+#  CSV merge helper
+# ============================================================
+
+def upsert_result_csv(out_csv, new_rec):
+    """Append or overwrite a row in the cumulative results CSV by sequentialid."""
+    df_new = pd.DataFrame([new_rec])
+    if os.path.exists(out_csv):
+        df_old = pd.read_csv(out_csv)
+        sid_col = 'sequentialid'
+        if sid_col in df_old.columns and sid_col in df_new.columns:
+            # Remove old row for this sid, append new
+            mask = df_old[sid_col].astype(str) != str(new_rec.get(sid_col, ''))
+            df_merged = pd.concat([df_old[mask], df_new], ignore_index=True)
         else:
-            warnings.warn(f"start_seqid={start_seqid} not found; starting at index={start_index}")
-    if target_seqid_list is None or len(target_seqid_list) == 0:
-        print("target_seqid_list is not given; all seqid in the SEP CSV file will be used (if you gave start_index of "
-              "start_seqid, they will still be used, but the reference will be based on the Query CSV file)")
-        target_seqid_list = df_sep['seqid'].astype('int32').to_list()
-    # 2) FITS set
-    hdf5_paths = glob.glob(os.path.join(data_dir, "*.hdf5")) # list of paths
-    # build map by sequentialid filename (basename without .fits)
-    hdf5set = {os.path.splitext(os.path.basename(p))[0]: p for p in hdf5_paths}
-
-    # 3) check missing
-    csv_ids = [str(int(s)) for s in (df_sep["seqid"]).tolist()]
-    missing = {sid for sid in csv_ids if sid+'-cropped' not in hdf5set} # make a set of sid's that doesn't have SCI
-    # images
-    # missing.update({sid for sid in csv_ids if sid+'-WHT' not in fitset}) # add sid's that doesn't have WHT images
-    # print("missing HDF5 files (from them being bad, probably... I haven't handled this in this python file yet.)")
-    _warn_and_write_missing(missing, data_dir)
-
-    t0 = time.perf_counter()
-    # 4) iterate
-    errors = []  # will store dicts: {'sequentialid': ..., 'error': 'type: message'}
-    records = []
-    total = len(df_query) # total query number
-    for idx in range(start_index, total):
-        row_query = df_query.iloc[idx]
-        sid = int(row_query['sequentialid'])
-        if (target_seqid_list != []):
-            if int(sid) not in target_seqid_list:
-                print(f"sid={sid} not in target_seqid (total len {len(target_seqid_list)}), skipping!")
-                continue
-            else:
-                pass
-        if sid in target_seqid_list:
-            pass
-        else:
-            warnings.warn(f"sequential id {sid} not found, skipping!")
-            continue
-        # index in SEP
-        index_sep_target = list(df_sep['seqid']).index(int(row_query['sequentialid']))
-        row_sep = df_sep.loc[index_sep_target]
-        #
-        elapsed_time_reporter(t0, idx, total-start_index, seq_id=sid)
-        # msg = f"\r[{idx + 1:>5}/{total:<5}] seq={sid} "
-        # print(msg, end='', flush=True)
-
-        # try:
-        if (sid in missing) or (not fit_model):
-            # missing FITS: record stub and keep going
-            rec = dict(sequentialid=sid, l2_initial=np.nan, l2_final=np.nan)
-        else:
-            # Check for conditional rerun if condition provided
-            should_run = True
-            if rerun_condition:
-                per_path = os.path.join(data_dir, f"{sid}-fit.csv")
-                if os.path.exists(per_path):
-                    try:
-                        df_prev = pd.read_csv(per_path)
-                        if not df_prev.empty:
-                            # Evaluate condition. 
-                            # If condition is TRUE, we rerun. 
-                            # If condition is FALSE, we skip (should_run = False).
-                            # Example: "loss_final > 1.0"
-                            # If row has loss_final=0.5, "0.5 > 1.0" is False -> Skip.
-                            # If row has loss_final=2.0, "2.0 > 1.0" is True -> Run.
-                            
-                            # We use safe evaluation or pandas eval
-                            # For single row dataframe, eval returns a Series. We take item().
-                            is_met = df_prev.eval(rerun_condition).iloc[0]
-                            if not is_met:
-                                should_run = False
-                                # Load existing record to memory so we don't lose it?
-                                # Actually, if we skip, we should probably output the OLD record to the new accumulate list
-                                # s.t. the final CSV is complete!
-                                rec = df_prev.to_dict(orient='records')[0]
-                                print(f"  Skipping seq={sid} (condition '{rerun_condition}' not met)")
-                    except Exception as e:
-                        print(f"  Warning: failed to evaluate condition for {sid}: {e}")
-                        should_run = True # Fail-safe: run it
-            
-            if should_run:
-                rec = process_one_target_optimize(row_query, data_dir, row_sep,
-                                                  opt_method=optimization_method, m=m_multipole,
-                                                  debug=debug,
-                                                  plot_initial_contour=plot_initial_contour,
-                                                  plot_final_contour=plot_final_contour,
-                                                  verbose=verbose,
-                                                  target_loss=target_loss)
-
-        # --- per-sample save so you can resume later ---
-        # save "best" parameters + l2s, even if NaNs (skipped/missing)
-        per_path = os.path.join(data_dir, f"{sid}-fit.csv")
-        pd.DataFrame([rec]).to_csv(per_path, index=False)
-
-        records.append(rec)
-
-    print()  # newline after progress
-
-    # 5) save results CSV
-    out_csv = os.path.join(data_dir, results_csv_name)
-    df = pd.DataFrame.from_records(records)
-    df.to_csv(out_csv, index=False)
-    print(f"Saved: {out_csv}")
-
-    # Save accumulated errors, if any
-    if errors:
-        err_df = pd.DataFrame(errors)
-        err_path = os.path.join(data_dir, errors_csv_name)
-        err_df.to_csv(err_path, index=False)
-        print(f"Errors: {len(errors)} (saved to {err_path})")
-
-    # 6) Top-N report
-    if fit_model:
-        key = "loss_final"
+            df_merged = pd.concat([df_old, df_new], ignore_index=True)
+        df_merged.to_csv(out_csv, index=False)
     else:
-        key = "loss_initial"
+        df_new.to_csv(out_csv, index=False)
 
-    if df.empty:
-        # empty df while debugging
-        warnings.warn("Emptry Dataframe!")
-        pass
-    else:
-        vals = df[["sequentialid", key]].copy()
-        vals = vals[np.isfinite(vals[key])]
-        vals = vals.sort_values(key, ascending=False).head(top_n)
-        if not vals.empty:
-            print(f"Top {min(top_n, len(vals))} worst by {key}:")
-            for _, r in vals.iterrows():
-                print(f"  seq={r['sequentialid']}  {key}={r[key]:.3g}")
-        else:
-            print("No finite loss values to rank.")
-    print("Done!")
 
-# ---------------------------
-# CLI-ish entry
-# ---------------------------
-# def select_nan_indices(df, key='a_m1_err(m=3)'):
-#     ind_nan = np.where(np.isnan(df[key]))[0]
-#     return ind_nan
+# ============================================================
+#  Main driver
+# ============================================================
 
-if __name__ == "__main__":
+def run_cosmos_optimization(args):
+    data_dir = args.data_dir
 
-    # -------- default settings you tweak here --------
-    DATA_DIR = "../data/HDUL_test4-10"
-    query_CSV_file_format = "cosmos_sample_N=*.csv"
+    # ── 1) Load catalogue CSV ──
+    query_csv = grab_matching_format(data_dir, args.query_csv_format)
+    df_query = pd.read_csv(query_csv)
 
-    target_seqid_list = [] #select(filename, fieldname, fieldvalue_min, fieldvalule_max) # TODO: Read CSV file and select ones with final loss > 1.0
-    optimization_method = 'SLSQP'
+    # ── 2) Load SEP summary CSV ──
+    sep_csv = grab_matching_format(data_dir, "sep_summary*.csv")
+    df_sep = pd.read_csv(sep_csv)
 
-    debug=False
-    verbose=False
+    # ── 3) Merge for sorting ──
+    # Ensure column types match for merge
+    df_query['sequentialid'] = df_query['sequentialid'].astype(int)
+    df_sep['seqid'] = df_sep['seqid'].astype(int)
 
-    if verbose:
-        print("optimization_method: ", optimization_method)
-
-    fit_model = True
-    MODES = [3, 4]
-    PLOT_INITIAL_CONTOUR    = True
-    PLOT_FINAL_CONTOUR      = True
-    TOPN = 5 # top how many to report
-    START_INDEX=0
-    START_SEQID=None
-    RERUN_CONDITION = "loss_final > 1.0" # None to run all; or string condition e.g. "loss_final > 1.0"
-    TARGET_LOSS = 1.0 # Set lower (e.g. 0.0) to force exhaustive attempts
-
-    datetime_string_new = str(datetime.now()).replace(' ', '_').replace(':', '')
-    datetime_string_new = datetime_string_new[:datetime_string_new.find('.')]
-    results_csv_name = "cosmos_optimization_result-at-"+datetime_string_new+".csv"
-
-    # CSV file's path
-    # query_CSV_file = grab_matching_format(DATA_DIR, query_CSV_file_format)
-    # df = pd.read_csv(query_CSV_file)
-    # print("CSV file headers:")
-    # print(df.head())  # Prints the first 5 rows of the DataFrame
-    # nan_indices = select_nan_indices(df)
-    # seqid_list = df['sequentialid'].tolist()[nan_indices]
-    # -------------------------------------------------
-
-    run_cosmos_optimization(
-        DATA_DIR,
-        target_seqid_list=target_seqid_list,
-        query_csv_format=query_CSV_file_format,
-        optimization_method=optimization_method,
-        m_multipole=tuple(MODES),
-        fit_model=fit_model,
-        plot_initial_contour=PLOT_INITIAL_CONTOUR,
-        plot_final_contour=PLOT_FINAL_CONTOUR,
-        top_n=TOPN, # how many top L2 to report; default 5
-        start_index=START_INDEX,
-        start_seqid=START_SEQID,
-        skip_on_error=SKIP_ON_ERROR, # skip error if True
-        errors_csv_name="__errors.csv",
-        debug=debug,
-        verbose=verbose,
-        results_csv_name=results_csv_name,
-        rerun_condition=RERUN_CONDITION,
-        target_loss=TARGET_LOSS,
+    df_merged = df_sep.merge(
+        df_query, left_on='seqid', right_on='sequentialid', how='inner'
     )
 
+    # ── 4) Sort ──
+    if args.sorting_label:
+        if args.sorting_label not in df_merged.columns:
+            available = sorted(df_merged.columns.tolist())
+            raise ValueError(
+                f"sorting_label '{args.sorting_label}' not found. "
+                f"Available columns: {available}"
+            )
+        ascending = (args.sorting_order == 'increase')
+        df_merged.sort_values(args.sorting_label, ascending=ascending, inplace=True)
+        df_merged.reset_index(drop=True, inplace=True)
+        print(f"Sorted by '{args.sorting_label}' ({args.sorting_order})")
+
+    # ── 5) Slice by index range ──
+    n_total = len(df_merged)
+    ini = args.select_ind_ini
+    fin = args.select_ind_fin if args.select_ind_fin is not None else n_total
+    fin = min(fin, n_total)
+    df_to_fit = df_merged.iloc[ini:fin].copy()
+    print(f"Selected indices [{ini}, {fin}) → {len(df_to_fit)} targets out of {n_total}")
+
+    # ── 6) Check HDF5 availability ──
+    hdf5_available = set()
+    for p in glob.glob(os.path.join(data_dir, "*-cropped.hdf5")):
+        base = os.path.splitext(os.path.basename(p))[0].replace("-cropped", "")
+        hdf5_available.add(base)
+
+    missing = []
+    target_rows = []
+    for _, row in df_to_fit.iterrows():
+        sid = str(int(row['seqid']))
+        if sid not in hdf5_available:
+            missing.append(sid)
+        else:
+            target_rows.append(row)
+    if missing:
+        _warn_and_write_missing(set(missing), data_dir)
+        print(f"  Skipping {len(missing)} targets with missing HDF5 files")
+
+    print(f"  {len(target_rows)} targets ready to fit")
+    if len(target_rows) == 0:
+        print("Nothing to do.")
+        return
+
+    # ── 7) Prepare output CSV path ──
+    out_csv = os.path.join(data_dir, args.results_csv_name)
+
+    # ── 8) Skip logic (check for already-fitted targets) ──
+    if args.skip_existing and os.path.exists(out_csv):
+        df_existing = pd.read_csv(out_csv)
+        existing_sids = set(df_existing['sequentialid'].astype(str).tolist())
+    else:
+        existing_sids = set()
+
+    # ── 9) Build fitting tasks ──
+    tasks = []
+    for row in target_rows:
+        sid = int(row['seqid'])
+        if str(sid) in existing_sids:
+            continue  # already fitted, skip unless overwrite
+        # Build row_query and row_sep dicts for this target
+        row_query = df_query[df_query['sequentialid'] == sid].iloc[0]
+        row_sep_match = df_sep[df_sep['seqid'] == sid].iloc[0]
+        tasks.append((sid, row_query.to_dict(), row_sep_match.to_dict()))
+
+    n_skipped = len(target_rows) - len(tasks)
+    if n_skipped > 0:
+        print(f"  Skipped {n_skipped} already-fitted targets (use --overwrite-range to re-fit)")
+    print(f"  {len(tasks)} targets to fit")
+
+    if len(tasks) == 0:
+        print("All targets already fitted. Nothing to do.")
+        return
+
+    # ── 10) Run fitting ──
+    m_multipole = tuple(args.m_multipole)
+    t_global = time.perf_counter()
+
+    if args.n_workers <= 1:
+        # Sequential
+        for i, (sid, rq, rs) in enumerate(tasks):
+            elapsed_time_reporter(t_global, i, len(tasks), seq_id=sid)
+            rec = fit_one_target(
+                sid, data_dir, rq, rs,
+                m_multipole, args.supersample, args.target_loss,
+                args.opt_method, args.plot_initial, args.plot_final,
+                args.verbose, args.use_jax,
+            )
+            # Incremental save
+            upsert_result_csv(out_csv, rec)
+            # Per-sample save
+            per_csv = os.path.join(data_dir, f"{sid}-fit.csv")
+            pd.DataFrame([rec]).to_csv(per_csv, index=False)
+            print(f"  [{i+1}/{len(tasks)}] sid={sid}  loss={rec.get('loss_final', np.nan):.4f}  "
+                  f"time={rec.get('fit_time', 0):.1f}s")
+    else:
+        # Parallel
+        print(f"  Running with {args.n_workers} parallel workers")
+        from tqdm import tqdm
+        records_done = []
+        with ProcessPoolExecutor(max_workers=args.n_workers) as pool:
+            future_to_sid = {}
+            for sid, rq, rs in tasks:
+                fut = pool.submit(
+                    fit_one_target,
+                    sid, data_dir, rq, rs,
+                    m_multipole, args.supersample, args.target_loss,
+                    args.opt_method, args.plot_initial, args.plot_final,
+                    args.verbose, args.use_jax,
+                )
+                future_to_sid[fut] = sid
+
+            for fut in tqdm(as_completed(future_to_sid), total=len(future_to_sid),
+                            desc="Fitting", unit="target"):
+                sid = future_to_sid[fut]
+                try:
+                    rec = fut.result()
+                except Exception as e:
+                    rec = dict(sequentialid=int(sid), error=str(e),
+                               loss_initial=np.nan, loss_final=np.nan, fit_time=np.nan)
+                # Save incrementally
+                upsert_result_csv(out_csv, rec)
+                per_csv = os.path.join(data_dir, f"{sid}-fit.csv")
+                pd.DataFrame([rec]).to_csv(per_csv, index=False)
+                records_done.append(rec)
+
+    # ── 11) Final report ──
+    elapsed_total = time.perf_counter() - t_global
+    print(f"\n{'='*50}")
+    print(f"  Fitting complete in {elapsed_total:.1f}s")
+    if os.path.exists(out_csv):
+        df_out = pd.read_csv(out_csv)
+        n_fitted = len(df_out)
+        if 'loss_final' in df_out.columns:
+            finite = df_out[np.isfinite(df_out['loss_final'])]
+            if len(finite) > 0:
+                print(f"  Total fitted: {n_fitted}")
+                print(f"  Mean loss: {finite['loss_final'].mean():.4f}")
+                print(f"  Median loss: {finite['loss_final'].median():.4f}")
+                worst = finite.nlargest(min(5, len(finite)), 'loss_final')
+                print(f"  Top-{len(worst)} worst:")
+                for _, r in worst.iterrows():
+                    t_str = f"  {r.get('fit_time', 0):.1f}s" if 'fit_time' in r else ""
+                    print(f"    seq={r['sequentialid']}  loss={r['loss_final']:.4f}{t_str}")
+        if 'fit_time' in df_out.columns:
+            times = df_out['fit_time'].dropna()
+            if len(times) > 0:
+                print(f"  Avg fit time: {times.mean():.1f}s  |  Total wall: {elapsed_total:.1f}s")
+    print(f"{'='*50}")
+    print(f"  Results: {out_csv}")
+    print("Done!")
+
+
+# ============================================================
+#  CLI
+# ============================================================
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Fit elliptical-multipole Sérsic profiles to COSMOS targets.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # ── Paths ──
+    parser.add_argument("--data-dir", type=str, default="../data/HDUL_test4-10",
+                        help="Directory containing preprocessed HDF5 files and CSVs")
+    parser.add_argument("--query-csv-format", type=str, default="cosmos_sample_N=*.csv",
+                        help="Glob pattern for the query catalogue CSV")
+    parser.add_argument("--results-csv-name", type=str,
+                        default="cosmos_optimization_result.csv",
+                        help="Name of the cumulative results CSV file")
+
+    # ── Target selection ──
+    parser.add_argument("--sorting-label", type=str, default="sequentialid",
+                        help="Column to sort targets by (e.g. r50, sequentialid, sersic_n_gim2d)")
+    parser.add_argument("--sorting-order", type=str, default="increase",
+                        choices=["increase", "decrease"],
+                        help="Sort order: 'increase' (ascending) or 'decrease' (descending)")
+    parser.add_argument("--select-ind-ini", type=int, default=0,
+                        help="Start index (inclusive) after sorting")
+    parser.add_argument("--select-ind-fin", type=int, default=10,
+                        help="End index (exclusive) after sorting; use a large number for all")
+    parser.add_argument("--skip-existing", action="store_true", default=False,
+                        help="Skip targets already in the results CSV (default: re-fit all in range)")
+
+    # ── Fitting parameters ──
+    parser.add_argument("--supersample", type=int, default=3,
+                        help="Supersampling factor for model evaluation")
+    parser.add_argument("--target-loss", type=float, default=1.2,
+                        help="Reduced χ² threshold: stop optimisation when loss ≤ this value")
+    parser.add_argument("--opt-method", type=str, default="SLSQP",
+                        help="Primary optimisation method (SLSQP or L-BFGS-B)")
+    parser.add_argument("--m-multipole", type=int, nargs="+", default=[3, 4],
+                        help="Multipole orders to fit")
+
+    # ── Plotting ──
+    parser.add_argument("--plot-initial", action="store_true", default=True,
+                        help="Generate initial contour plots")
+    parser.add_argument("--plot-final", action="store_true", default=True,
+                        help="Generate final comparison plots")
+
+    # ── Parallelism ──
+    parser.add_argument("--n-workers", type=int, default=1,
+                        help="Number of parallel workers (1 = sequential)")
+
+    # ── JAX acceleration ──
+    parser.add_argument("--no-jax", dest="use_jax", action="store_false", default=True,
+                        help="Disable JAX JIT loss (use numpy loss instead)")
+
+    # ── Debug ──
+    parser.add_argument("--debug", action="store_true", default=False)
+    parser.add_argument("--verbose", action="store_true", default=False)
+
+    args = parser.parse_args()
+    run_cosmos_optimization(args)

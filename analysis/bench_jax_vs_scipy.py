@@ -200,6 +200,19 @@ def build_loss_jax(X_jax, Y_jax, sci_jax, wht_jax, m, ss_factor):
 
     m_jax = jnp.asarray(m)
 
+    # JIT-safe sersic: no Python-level if-guards on traced values
+    def _sersic_jit(R, amplitude=1.0, R_sersic=1.0, n_sersic=4.0):
+        R = jnp.maximum(0.0001, jnp.asarray(R))
+        R_sersic = jnp.maximum(1e-8, R_sersic)
+        n_sersic = jnp.maximum(1e-8, n_sersic)
+        bn = 1.999 * n_sersic - 0.327
+        bn = jnp.maximum(bn, 1e-5)
+        x = R / R_sersic
+        logx = jnp.where(x > 0, jnp.log(x), -jnp.inf)
+        pow_term = jnp.exp((1.0 / n_sersic) * logx)
+        out = amplitude * jnp.exp(-bn * (pow_term - 1.0))
+        return jnp.where(x >= 0, out, 0.0)
+
     @jit
     def _loss(vec):
         # Unpack inline (must use jnp for tracing)
@@ -215,7 +228,7 @@ def build_loss_jax(X_jax, Y_jax, sci_jax, wht_jax, m, ss_factor):
         bg_v = vec[5+2*k+2]
 
         I = EMP2D_jax(
-            X_jax, Y_jax, sersic_jax,
+            X_jax, Y_jax, _sersic_jit,
             q=q_v, theta_ell=theta_ell_v,
             m=m_jax, a_m=a_m_v, phi_m=phi_m_v,
             x0=x0_v, y0=y0_v,

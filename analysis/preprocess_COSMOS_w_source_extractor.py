@@ -269,11 +269,11 @@ def main(config, bad_seq_id_file_csv, verbose=False, debug=False):
     #
     df_bad_data = pandas.read_csv(bad_seq_id_file_csv)
     bad = df_bad_data['bad'] # 1 if marked as bad, NaN if not
-    num_bad = np.sum(bad==1.); num_notbad = np.sum(np.isnan(bad))
+    num_bad = np.sum(bad==1.); num_notbad = np.sum(np.isnan(bad) + (bad==0.))
     if (num_bad + num_notbad) != len(df_bad_data):
         play_sound_list()
-        print("Following seqid's have neither 1 nor NaN! Check!!!")
-        seq_to_check = list(df_bad_data['seqid'][(bad!=1.) * (~np.isnan(bad))])
+        print("Following seqid's have neither 1 nor NaN nor 0! Check!!!")
+        seq_to_check = list(df_bad_data['seqid'][(bad!=1.) * (~np.isnan(bad)) * (bad!=0.)])
         print(seq_to_check)
         play_sound_list()
     df_bad = df_bad_data[bad==1.]
@@ -366,7 +366,7 @@ if __name__ == '__main__':
     # >>> Edit these defaults instead of passing CLI args <<<
 
     config = {
-        'path': '../data/HDUL_test4-10',
+        'path': '../data/HDUL_test7-big100',
         'filename_format': "{seqid}-{TYPE}.fits",
         # File naming: expects {seqid}-cutout_{size}_arcsec.fits in cwd
         'start_index': None,
