@@ -1,3 +1,12 @@
+*.mp4
+AGENTS.md
+*.png
+*.txt
+*.tex
+*.csv
+*.svg
+*.md
+references
 *.bib
 ch4_optical_multipole.md
 *.log
@@ -23,3 +32,4 @@ optical_elliptical_multipole.egg-info
 obs
 test_source_extractor
 analysis/nonjax_jax_comparison
+temporary

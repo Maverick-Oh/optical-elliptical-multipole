@@ -202,10 +202,10 @@ def plot_grid(dfs, save=True):
 CRITERION_STYLES = [
     # (key suffix, color, x_offset, label)
     ('res_am',  'red',    -0.20, 'a_m residual'),
-    ('unc_am',  'orange', -0.12, 'a_m uncertainty'),
+    ('unc_am',  'orange', -0.12, 'a_m uncertainty\n'),
     ('sig_am',  'gold',   -0.04, 'a_m σ'),
     ('res_phi', 'green',   0.04, 'ϕ_m residual'),
-    ('unc_phi', 'dodgerblue', 0.12, 'ϕ_m uncertainty'),
+    ('unc_phi', 'dodgerblue', 0.12, 'ϕ_m uncertainty\n'),
     ('sig_phi', 'purple',  0.20, 'ϕ_m σ'),
 ]
 
@@ -280,11 +280,11 @@ def launch_gui(dfs):
     fig_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
     slider_defs = [
-        ('a_m_factor1', 'a_m residual factor',     0, 2.0, 0.05, 1.0,  'red'),
+        ('a_m_factor1', 'a_m residual factor',     0, 2.0, 0.05, 0.5,  'red'),
         ('a_m_factor2', 'a_m uncertainty factor',   0, 2.0, 0.05, 1.0,  'orange'),
         ('a_m_factor3', 'a_m σ factor',             0, 4.0, 0.1,  2.0,  'gold'),
         ('phi_m_factor1', 'ϕ_m residual factor',    0, 1.0, 0.05, 0.5,  'green'),
-        ('phi_m_factor2', 'ϕ_m uncertainty factor',  0, 2.0, 0.05, 1.0, 'dodgerblue'),
+        ('phi_m_factor2', 'ϕ_m uncertainty factor',  0, 2.0, 0.05, 0.5, 'dodgerblue'),
         ('phi_m_factor3', 'ϕ_m σ factor',           0, 4.0, 0.1,  2.0,  'purple'),
     ]
 
@@ -329,7 +329,7 @@ def launch_gui(dfs):
         }
     )
     # Increased hspace from 0.4 to 0.7 to avoid title/tick overlaps
-    fig.subplots_adjust(hspace=0.7, wspace=0.45, top=0.90, bottom=0.02,
+    fig.subplots_adjust(hspace=0.7, wspace=0.1, top=0.90, bottom=0.02,
                         left=0.07, right=0.96)
 
     header_artists = []
@@ -376,7 +376,7 @@ def launch_gui(dfs):
                 ax.set_xticks(range(n_n))
                 ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
                 ax.set_yticks(range(n_R))
-                ax.set_yticklabels([f'{v:.1f}' for v in R_grid], fontsize=6)
+                ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
 
                 ax.set_title(ttpl.format(m=m_mode), fontsize=7)
                 if mi == 0:
@@ -395,7 +395,7 @@ def launch_gui(dfs):
             ax_sum.set_xticks(range(n_n))
             ax_sum.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
             ax_sum.set_yticks(range(n_R))
-            ax_sum.set_yticklabels([f'{v:.1f}' for v in R_grid], fontsize=6)
+            ax_sum.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
             ax_sum.set_facecolor('#f0f0f0')
 
             # Draw cell boundaries
@@ -441,7 +441,7 @@ def launch_gui(dfs):
         ax.set_xticks(range(n_n))
         ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
         ax.set_yticks(range(n_R))
-        ax.set_yticklabels([f'{v:.1f}' for v in R_grid], fontsize=6)
+        ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
         ax.set_title(ttpl, fontsize=8, fontweight='bold')
         if ai == 0:
             ax.set_ylabel('R_sersic', fontsize=8, fontweight='bold')
@@ -464,7 +464,7 @@ def launch_gui(dfs):
         ax.set_xticks(range(n_n))
         ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
         ax.set_yticks(range(n_R))
-        ax.set_yticklabels([f'{v:.1f}' for v in R_grid], fontsize=6)
+        ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
         ax.set_facecolor('#f0f0f0')
         for edge in [-0.5, 0.5, 1.5, 2.5, 3.5]:
             ax.axvline(edge, color='black', linewidth=1)
@@ -507,8 +507,7 @@ def launch_gui(dfs):
         f1, f2, f3 = sliders['a_m_factor1'].get(), sliders['a_m_factor2'].get(), sliders['a_m_factor3'].get()
         pf1, pf2, pf3 = sliders['phi_m_factor1'].get(), sliders['phi_m_factor2'].get(), sliders['phi_m_factor3'].get()
 
-        total_filtered, total_cells = 0, 0
-        all_bads = {} # store bad masks for global summary
+        all_bads = {}  # store bad masks for global summary
 
         for m_idx, m_mode in enumerate([3, 4]):
             row_off = m_idx * 8
@@ -524,11 +523,6 @@ def launch_gui(dfs):
                         np.abs(cd['res_phi']) > pf1*phi_unit, cd['unc_phi'] > pf2*phi_unit, np.abs(cd['sig_phi']) > pf3]
                 all_bads[(m_idx, ai)] = bads
 
-                any_bad = bads[0].copy()
-                for b in bads[1:]: any_bad |= b
-                total_cells += valid.sum()
-                total_filtered += (any_bad & valid).sum()
-
                 # Draw on metrics and m-specific summary
                 for ci, (_, color, dx, _) in enumerate(CRITERION_STYLES):
                     # Metric axis
@@ -543,6 +537,19 @@ def launch_gui(dfs):
                                                        markeredgecolor=color, markersize=msize,
                                                        markeredgewidth=mwidth, zorder=10)
                                     x_markers.append(ln)
+
+        # Count filtered cells once across both m=3 and m=4
+        # A cell is "filtered" if it fails ANY criterion for EITHER m=3 or m=4
+        total_filtered, total_cells = 0, 0
+        for ai in range(n_cols):
+            valid = np.isfinite(raw_per_cell[(0, ai)]['res_am'])
+            any_bad_combined = np.zeros((n_R, n_n), dtype=bool)
+            for m_idx in range(2):
+                bads = all_bads[(m_idx, ai)]
+                for b in bads:
+                    any_bad_combined |= b
+            total_cells += valid.sum()
+            total_filtered += (any_bad_combined & valid).sum()
 
         # Global Combined summary (row 17)
         for ai in range(n_cols):
@@ -603,16 +610,345 @@ def launch_gui(dfs):
 # Main
 # ---------------------------------------------------------------------------
 
+def save_headless(dfs):
+    """Non-interactive: build the same figure as launch_gui, apply default
+    thresholds, save PDF, and exit without opening a window."""
+    matplotlib.use('Agg')  # headless backend
+
+    if not dfs:
+        print("No data to display.")
+        return
+
+    df = pd.concat(dfs, ignore_index=True)
+    if 'a_m3_true' not in df.columns:
+        df['a_m3_true'] = df['a_m3']
+    df['a_m_group'] = df['a_m3_true'].apply(lambda x: round(x, 4))
+
+    a_m_groups = sorted(df['a_m_group'].unique())
+    R_grid = sorted(df['R_sersic_true'].unique())
+    n_grid = sorted(df['n_sersic_true'].unique())
+
+    n_R = len(R_grid)
+    n_n = len(n_grid)
+
+    # Default slider values (same as slider_defs defaults)
+    DEFAULTS = {
+        'a_m_factor1': 0.5,
+        'a_m_factor2': 1.0,
+        'a_m_factor3': 2.0,
+        'phi_m_factor1': 0.5,
+        'phi_m_factor2': 0.5,
+        'phi_m_factor3': 2.0,
+    }
+
+    # ---- Pre-compute (same logic as launch_gui) ----
+    metric_names = ['res_am', 'unc_am', 'sig_am', 'res_phi', 'unc_phi', 'sig_phi', 'loss']
+    precomp = {}
+    raw_per_cell = {}
+
+    for m_idx, m_mode in enumerate([3, 4]):
+        phi_unit = np.pi / (2 * m_mode)
+        period = 2 * np.pi / m_mode
+
+        for ai, a_m in enumerate(a_m_groups):
+            dg = df[df['a_m_group'] == a_m].copy()
+
+            dg['res_am'] = dg[f'a_m{m_mode}_best'] - dg[f'a_m{m_mode}_true']
+            dg['unc_am'] = dg[f'a_m{m_mode}_err']
+            dg['sig_am'] = dg['res_am'] / dg['unc_am']
+
+            raw_diff = dg[f'phi_m{m_mode}_best'] - dg[f'phi_m{m_mode}_true']
+            dg['res_phi'] = (raw_diff + period / 2) % period - period / 2
+            dg['unc_phi'] = dg[f'phi_m{m_mode}_err']
+            dg['sig_phi'] = dg['res_phi'] / dg['unc_phi']
+            dg['loss'] = dg['loss_non_pso']
+
+            cell_data = {mn: np.full((n_R, n_n), np.nan) for mn in metric_names}
+            for _, row in dg.iterrows():
+                ri = R_grid.index(row['R_sersic_true'])
+                ni = n_grid.index(row['n_sersic_true'])
+                for mn in metric_names:
+                    cell_data[mn][ri, ni] = row[mn]
+
+            raw_per_cell[(m_idx, ai)] = cell_data
+            for mi, mn in enumerate(metric_names):
+                precomp[(m_idx, ai, mi)] = cell_data[mn]
+
+    # ---- Build figure (same layout as launch_gui) ----
+    n_cols = len(a_m_groups)
+    n_metric_rows = 6
+    total_rows = 18
+
+    height_ratios = [1]*6 + [1.2] + [0.3] + [1]*6 + [1.2] + [0.3] + [1.2]*2
+
+    fig, all_axes = plt.subplots(
+        total_rows, n_cols + 1,
+        figsize=(3.6 * n_cols + 1.0, 2.7 * total_rows),
+        gridspec_kw={
+            'width_ratios': [1] * n_cols + [0.05],
+            'height_ratios': height_ratios,
+        }
+    )
+    fig.subplots_adjust(hspace=0.7, wspace=0.1, top=0.90, bottom=0.02,
+                        left=0.07, right=0.96)
+
+    spec_meta = [
+        (-0.01, 0.01, 'bwr',    'a_m{m} residual (est−true)'),
+        (0,     0.01, 'Greens', 'a_m{m} unc (1σ)'),
+        (-2,    2,    'bwr',    'a_m{m} σ from truth'),
+        (None,  None, 'bwr',    'ϕ_m{m} residual (est−true)'),
+        (None,  None, 'Greens', 'ϕ_m{m} unc (1σ)'),
+        (-2,    2,    'bwr',    'ϕ_m{m} σ from truth'),
+        (0,     1.2,  'Blues',  'Fitting Loss (loss_non_pso)'),
+    ]
+
+    # Draw static heatmaps
+    for m_idx, m_mode in enumerate([3, 4]):
+        row_off = m_idx * 8
+        phi_unit = np.pi / (2 * m_mode)
+
+        for ai in range(n_cols):
+            for mi in range(n_metric_rows):
+                ax = all_axes[row_off + mi, ai]
+                arr = precomp[(m_idx, ai, mi)]
+
+                vmin, vmax, cmap, ttpl = spec_meta[mi]
+                if mi == 3:
+                    vmin, vmax = -phi_unit, phi_unit
+                elif mi == 4:
+                    vmin, vmax = 0, phi_unit
+
+                ax.imshow(arr, aspect='auto', origin='upper',
+                          cmap=cmap, vmin=vmin, vmax=vmax,
+                          interpolation='nearest')
+
+                for ri in range(n_R):
+                    for ni in range(n_n):
+                        v = arr[ri, ni]
+                        if np.isfinite(v):
+                            txt = f'{v:.3f}'
+                            ax.text(ni, ri, txt, ha='center', va='center',
+                                    fontsize=6, color='black')
+
+                ax.set_xticks(range(n_n))
+                ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
+                ax.set_yticks(range(n_R))
+                ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
+
+                ax.set_title(ttpl.format(m=m_mode), fontsize=7)
+                if mi == 0:
+                    ax.text(0.5, 1.3, f'a_m = {a_m_groups[ai]}',
+                            transform=ax.transAxes, ha='center', va='bottom',
+                            fontsize=9, fontweight='bold')
+
+                ax.set_ylabel('R_sersic' if ai == 0 else '', fontsize=8, fontweight='bold')
+
+            # Summary row
+            summary_row = row_off + n_metric_rows
+            ax_sum = all_axes[summary_row, ai]
+            ax_sum.set_xlim(-0.5, n_n - 0.5)
+            ax_sum.set_ylim(-0.5, n_R - 0.5)
+            ax_sum.invert_yaxis()
+            ax_sum.set_xticks(range(n_n))
+            ax_sum.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
+            ax_sum.set_yticks(range(n_R))
+            ax_sum.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
+            ax_sum.set_facecolor('#f0f0f0')
+            for edge in [-0.5, 0.5, 1.5, 2.5, 3.5]:
+                ax_sum.axvline(edge, color='black', linewidth=1)
+                ax_sum.axhline(edge, color='black', linewidth=1)
+            ax_sum.set_title(f'm={m_mode} Combined Threshold Map', fontsize=8, fontweight='normal')
+            if ai == 0:
+                ax_sum.set_ylabel('R_sersic', fontsize=8, fontweight='bold')
+            ax_sum.set_xlabel('n_sersic', fontsize=8, fontweight='bold', labelpad=0)
+
+        # Colorbars
+        for mi in range(n_metric_rows):
+            cax = all_axes[row_off + mi, -1]
+            vmin, vmax, cmap, _ = spec_meta[mi]
+            if mi == 3:
+                vmin, vmax = -phi_unit, phi_unit
+            elif mi == 4:
+                vmin, vmax = 0, phi_unit
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            cb = fig.colorbar(sm, cax=cax)
+            if mi in [3, 4]:
+                cb.ax.yaxis.set_major_formatter(_pi_frac_formatter(m_mode))
+            cb.ax.tick_params(labelsize=6)
+        all_axes[row_off + n_metric_rows, -1].set_visible(False)
+
+    # Loss heatmap row
+    loss_row = 16
+    for ai in range(n_cols):
+        ax = all_axes[loss_row, ai]
+        arr = precomp[(0, ai, 6)]
+        vmin, vmax, cmap, ttpl = spec_meta[6]
+        ax.imshow(arr, aspect='auto', origin='upper', cmap=cmap, vmin=vmin, vmax=vmax)
+        for ri in range(n_R):
+            for ni in range(n_n):
+                v = arr[ri, ni]
+                if np.isfinite(v):
+                    ax.text(ni, ri, f'{v:.3f}', ha='center', va='center', fontsize=6, color='black')
+        ax.set_xticks(range(n_n))
+        ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
+        ax.set_yticks(range(n_R))
+        ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
+        ax.set_title(ttpl, fontsize=8, fontweight='bold')
+        if ai == 0:
+            ax.set_ylabel('R_sersic', fontsize=8, fontweight='bold')
+        ax.set_xlabel('n_sersic', fontsize=8, fontweight='bold', labelpad=0)
+
+    cax_loss = all_axes[loss_row, -1]
+    norm_l = mcolors.Normalize(vmin=0, vmax=1.2)
+    sm_l = plt.cm.ScalarMappable(cmap='Blues', norm=norm_l)
+    sm_l.set_array([])
+    fig.colorbar(sm_l, cax=cax_loss).ax.tick_params(labelsize=6)
+
+    # Total combined threshold row
+    total_sum_row = 17
+    for ai in range(n_cols):
+        ax = all_axes[total_sum_row, ai]
+        ax.set_xlim(-0.5, n_n - 0.5)
+        ax.set_ylim(-0.5, n_R - 0.5)
+        ax.invert_yaxis()
+        ax.set_xticks(range(n_n))
+        ax.set_xticklabels([f'{v:.1f}' for v in n_grid], fontsize=6)
+        ax.set_yticks(range(n_R))
+        ax.set_yticklabels([f'{v:.1f}' for v in R_grid] if ai == 0 else [], fontsize=6)
+        ax.set_facecolor('#f0f0f0')
+        for edge in [-0.5, 0.5, 1.5, 2.5, 3.5]:
+            ax.axvline(edge, color='black', linewidth=1)
+            ax.axhline(edge, color='black', linewidth=1)
+        ax.set_title('Combined Threshold Map (m=3 & m=4)', fontsize=8, fontweight='bold')
+        if ai == 0:
+            ax.set_ylabel('R_sersic', fontsize=8, fontweight='bold')
+        ax.set_xlabel('n_sersic', fontsize=8, fontweight='bold', labelpad=0)
+    all_axes[total_sum_row, -1].set_visible(False)
+
+    # Spacers
+    for row in [7, 15]:
+        for ax in all_axes[row, :]:
+            ax.set_visible(False)
+        bbox = all_axes[row, 0].get_position()
+        sep_y = bbox.y0 + bbox.height / 2
+        line = plt.Line2D([0.04, 0.98], [sep_y, sep_y], transform=fig.transFigure,
+                          color='black', linewidth=2.5)
+        fig.add_artist(line)
+
+    # Section labels
+    for m_idx, label in enumerate(['m=3', 'm=4', 'Global']):
+        row_off = [0, 8, 16][m_idx]
+        y_center_fig = 0.02 + (0.90 - 0.02) * (1 - (row_off + 3.5)/total_rows)
+        if m_idx == 2: y_center_fig = 0.02 + (0.90 - 0.02) * (1 - (17)/total_rows)
+        fig.text(0.01, y_center_fig, label, fontsize=14, fontweight='bold', va='center', rotation=90)
+
+    # ---- Apply threshold markers (same logic as reevaluate) ----
+    f1 = DEFAULTS['a_m_factor1']
+    f2 = DEFAULTS['a_m_factor2']
+    f3 = DEFAULTS['a_m_factor3']
+    pf1 = DEFAULTS['phi_m_factor1']
+    pf2 = DEFAULTS['phi_m_factor2']
+    pf3 = DEFAULTS['phi_m_factor3']
+
+    all_bads = {}
+
+    for m_idx, m_mode in enumerate([3, 4]):
+        row_off = m_idx * 8
+        phi_unit = np.pi / (2 * m_mode)
+        marker = '2' if m_mode == 3 else 'x'
+        summary_row = row_off + n_metric_rows
+
+        for ai in range(n_cols):
+            cd = raw_per_cell[(m_idx, ai)]
+            valid = np.isfinite(cd['res_am'])
+
+            bads = [
+                np.abs(cd['res_am']) > f1*0.01,
+                cd['unc_am'] > f2*0.01,
+                np.abs(cd['sig_am']) > f3,
+                np.abs(cd['res_phi']) > pf1*phi_unit,
+                cd['unc_phi'] > pf2*phi_unit,
+                np.abs(cd['sig_phi']) > pf3,
+            ]
+            all_bads[(m_idx, ai)] = bads
+
+            for ci, (_, color, dx, _) in enumerate(CRITERION_STYLES):
+                ax = all_axes[row_off + ci, ai]
+                ax_s = all_axes[summary_row, ai]
+                for ri in range(n_R):
+                    for ni in range(n_n):
+                        if bads[ci][ri, ni] and valid[ri, ni]:
+                            for target_ax, msize, mwidth in [(ax, 10, 1), (ax_s, 12, 1.5)]:
+                                target_ax.plot(ni+dx, ri, marker, color=color,
+                                               markeredgecolor=color, markersize=msize,
+                                               markeredgewidth=mwidth, zorder=10)
+
+    # Count filtered
+    total_filtered, total_cells = 0, 0
+    for ai in range(n_cols):
+        valid = np.isfinite(raw_per_cell[(0, ai)]['res_am'])
+        any_bad_combined = np.zeros((n_R, n_n), dtype=bool)
+        for m_idx in range(2):
+            bads = all_bads[(m_idx, ai)]
+            for b in bads:
+                any_bad_combined |= b
+        total_cells += valid.sum()
+        total_filtered += (any_bad_combined & valid).sum()
+
+    # Global combined summary (row 17)
+    for ai in range(n_cols):
+        ax_g = all_axes[17, ai]
+        valid_g = np.isfinite(raw_per_cell[(0, ai)]['res_am'])
+        for m_idx, m_mode in enumerate([3, 4]):
+            marker = '2' if m_mode == 3 else 'x'
+            bads = all_bads[(m_idx, ai)]
+            for ci, (_, color, dx, _) in enumerate(CRITERION_STYLES):
+                for ri in range(n_R):
+                    for ni in range(n_n):
+                        if bads[ci][ri, ni] and valid_g[ri, ni]:
+                            ax_g.plot(ni+dx, ri, marker, color=color,
+                                      markeredgecolor=color, markersize=12,
+                                      markeredgewidth=1.5, zorder=10)
+
+    # Header info
+    vals = [f"{f:.2f}×0.01" for f in [f1, f2]] + [f"{f3:.1f}"] + \
+           [f"{f:.2f}×π/2m" for f in [pf1, pf2]] + [f"{pf3:.1f}"]
+    for i, (_, color, _, label) in enumerate(CRITERION_STYLES):
+        x = 0.12 + i * 0.14
+        rect = plt.Rectangle((x-0.008, 0.957), 0.01, 0.015, transform=fig.transFigure, color=color)
+        fig.add_artist(rect)
+        fig.text(x+0.005, 0.965, f"{label} > {vals[i]}", fontsize=9, fontweight='bold', va='center')
+    fig.text(0.5, 0.940, f"FILTERED: {total_filtered}/{total_cells} ({100*total_filtered/max(total_cells,1):.1f}%)",
+             fontsize=12, fontweight='bold', ha='center', va='center',
+             bbox=dict(facecolor='white', boxstyle='round,pad=0.3'))
+
+    # Save
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base = f'../data/multipole_grid_validation_interactive_{stamp}'
+    fig.savefig(base + '.pdf', bbox_inches='tight')
+    with open(base + '.txt', 'w') as fout:
+        for key, val in DEFAULTS.items():
+            fout.write(f"{key}: {val}\n")
+    print(f"Saved {base}.pdf and {base}.txt")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--gui', action='store_true',
                         help='Launch interactive Tkinter GUI')
+    parser.add_argument('--save', action='store_true',
+                        help='Headless: apply default thresholds, save PDF, exit')
     args = parser.parse_args()
 
     dfs = collect_all_dataframes()
 
     if args.gui:
         launch_gui(dfs)
+    elif args.save:
+        save_headless(dfs)
     else:
         plot_grid(dfs)

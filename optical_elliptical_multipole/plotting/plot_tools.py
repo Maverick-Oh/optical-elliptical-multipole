@@ -155,7 +155,7 @@ def detailed_comparison_plot(im1, im2, residual_map, *,
     param_order = [
         'n_sersic', 'R_sersic', 'amplitude', 
         'q', 'theta_ell',
-        'a_m3', 'phi_m3', 'a_m4', 'phi_m4',
+        'a_m3', 'phi_m3', 'theta_m3', 'a_m4', 'phi_m4', 'theta_m4',
         'x0', 'y0', 'background'
     ]
     

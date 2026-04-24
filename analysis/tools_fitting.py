@@ -1,8 +1,10 @@
 import numpy as np
 # OEM (non-JAX) imports — keep these paths as requested
 from optical_elliptical_multipole.nonjax.intensity_functions import sersic
-from optical_elliptical_multipole.nonjax.profiles1D import Elliptical_Multipole_Profile_1D
-from optical_elliptical_multipole.nonjax.profiles2D import Elliptical_Multipole_Profile_2D
+from optical_elliptical_multipole.nonjax.profiles1D import Elliptical_Multipole_Profile_1D, Circular_Multipole_Profile_1D
+from optical_elliptical_multipole.nonjax.profiles2D import (
+    Elliptical_Multipole_Profile_2D, Circular_Multipole_Profile_2D, Elliptical_Profile_2D
+)
 from optical_elliptical_multipole.plotting.plot_tools import comparison_plot, detailed_comparison_plot
 import warnings
 import os
@@ -158,6 +160,55 @@ def simulate_model_elliptical_multipole(
         X, Y, sersic,
         q=q, theta_ell=theta_ell,
         m=np.asarray(m), a_m=np.asarray(a_m), phi_m=np.asarray(phi_m),
+        x0=x0, y0=y0,
+        amplitude=amplitude, R_sersic=R_sersic, n_sersic=n_sersic
+    )
+    return I + background
+
+
+def simulate_model_circular_multipole(
+    X, Y, *,
+    n_sersic, R_sersic, amplitude,
+    q, theta_ell,
+    m, a_m, theta_m,
+    x0, y0,
+    background=0.0,
+    psf=None
+):
+    """
+    Build model image: circular multipole Sérsic + background.
+    Uses theta_m (polar angle) instead of phi_m (eccentric anomaly).
+    """
+    if psf is not None:
+        raise NotImplementedError("PSF convolution pending (hook present).")
+
+    I = Circular_Multipole_Profile_2D(
+        X, Y, sersic,
+        q=q, theta_ell=theta_ell,
+        m=np.asarray(m), a_m=np.asarray(a_m), theta_m=np.asarray(theta_m),
+        x0=x0, y0=y0,
+        amplitude=amplitude, R_sersic=R_sersic, n_sersic=n_sersic
+    )
+    return I + background
+
+
+def simulate_model_elliptical_sersic(
+    X, Y, *,
+    n_sersic, R_sersic, amplitude,
+    q, theta_ell,
+    x0, y0,
+    background=0.0,
+    psf=None
+):
+    """
+    Build model image: elliptical Sérsic (no multipole) + background.
+    """
+    if psf is not None:
+        raise NotImplementedError("PSF convolution pending (hook present).")
+
+    I = Elliptical_Profile_2D(
+        X, Y, sersic,
+        q=q, theta_ell=theta_ell,
         x0=x0, y0=y0,
         amplitude=amplitude, R_sersic=R_sersic, n_sersic=n_sersic
     )
@@ -567,6 +618,115 @@ def _build_jax_loss(X_ss_np, Y_ss_np, sci_np, wht_np, mask_np,
     return loss_fn
 
 
+# ---------------------------
+# Model dispatch helper
+# ---------------------------
+VALID_MODEL_TYPES = ('elliptical_multipole', 'circular_multipole', 'elliptical')
+
+def _build_model_image(model_type, X, Y, pp, m, psf=None):
+    """
+    Dispatch to the correct simulate_model_* function based on model_type.
+    pp is the full parameter dict (from unpack_params).
+    Returns the model image (without background added).
+    """
+    if model_type == 'elliptical_multipole':
+        return simulate_model_elliptical_multipole(
+            X, Y,
+            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
+            q=pp['q'], theta_ell=pp['theta_ell'], m=m, a_m=pp['a_m'], phi_m=pp['phi_m'],
+            x0=pp['x0'], y0=pp['y0'], background=0.0, psf=psf
+        )
+    elif model_type == 'circular_multipole':
+        # Circular multipole uses theta_m instead of phi_m
+        # In the packed vector, the angle slots are the same; the model just interprets them differently.
+        return simulate_model_circular_multipole(
+            X, Y,
+            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
+            q=pp['q'], theta_ell=pp['theta_ell'], m=m, a_m=pp['a_m'], theta_m=pp['phi_m'],
+            x0=pp['x0'], y0=pp['y0'], background=0.0, psf=psf
+        )
+    elif model_type == 'elliptical':
+        return simulate_model_elliptical_sersic(
+            X, Y,
+            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
+            q=pp['q'], theta_ell=pp['theta_ell'],
+            x0=pp['x0'], y0=pp['y0'], background=0.0, psf=psf
+        )
+    else:
+        raise ValueError(f"Unknown model_type='{model_type}'. Must be one of {VALID_MODEL_TYPES}")
+
+
+# ---------------------------
+# Fixed-params helpers
+# ---------------------------
+# Parameter ordering in the packed vector:
+#   [n_sersic, R_sersic, amplitude, q, theta_ell, a_m0..a_mk-1, phi_m0..phi_mk-1, x0, y0, background]
+# The PARAM_NAMES list (without array expansion) is used to identify which elements to freeze.
+
+def _get_param_names(k):
+    """Return ordered list of scalar param names matching the packed vector layout."""
+    names = ['n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell']
+    for i in range(k):
+        names.append(f'a_m_{i}')
+    for i in range(k):
+        names.append(f'phi_m_{i}')
+    names.extend(['x0', 'y0', 'background'])
+    return names
+
+
+def _fixed_params_to_mask(fixed_params, k):
+    """
+    Convert a fixed_params dict to a boolean mask over the packed vector.
+    
+    fixed_params keys can be:
+      - Scalar: 'n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background'
+      - Array shorthand: 'a_m' (freezes all a_m), 'phi_m' (freezes all phi_m)
+      - Per-element: 'a_m_0', 'a_m_1', 'phi_m_0', 'phi_m_1', etc.
+    
+    Returns:
+      free_mask: bool array, True = free (optimized), False = fixed
+      fixed_values: full-length array of fixed values (only meaningful where free_mask is False)
+    """
+    if fixed_params is None:
+        return None, None
+    
+    param_names = _get_param_names(k)
+    n_total = len(param_names)
+    free_mask = np.ones(n_total, dtype=bool)  # default: all free
+    fixed_values = np.zeros(n_total, dtype=float)
+    
+    for key, val in fixed_params.items():
+        if key in ('a_m', 'phi_m'):
+            # Array shorthand: freeze all elements
+            for i in range(k):
+                idx_name = f'{key}_{i}'
+                idx = param_names.index(idx_name)
+                free_mask[idx] = False
+                if np.isscalar(val):
+                    fixed_values[idx] = val
+                else:
+                    fixed_values[idx] = val[i]
+        elif key in param_names:
+            idx = param_names.index(key)
+            free_mask[idx] = False
+            fixed_values[idx] = val
+        # else: silently ignore unknown keys
+    
+    return free_mask, fixed_values
+
+
+def _pack_free(full_vec, free_mask):
+    """Extract only the free elements from a full parameter vector."""
+    return full_vec[free_mask]
+
+
+def _unpack_free(free_vec, free_mask, fixed_values):
+    """Reconstruct the full parameter vector from free elements + fixed values."""
+    full = fixed_values.copy()
+    full[free_mask] = free_vec
+    return full
+
+
 def process_one_target_optimize(
         row_query, 
         data_dir, 
@@ -588,10 +748,25 @@ def process_one_target_optimize(
         pso_only=False,
         n_particles_factor=4,
         use_jax=True,  # Use JAX JIT loss when available (3-49× faster)
+        model_type='elliptical_multipole',  # 'elliptical_multipole', 'circular_multipole', or 'elliptical'
+        fixed_params=None,  # dict of param_name -> value to freeze during optimization
     ):
     """
-    optimize the target galaxy with Sersic + Multipole model.
+    Optimize the target galaxy with Sersic + Multipole model.
+    
+    Parameters
+    ----------
+    model_type : str
+        Model to fit: 'elliptical_multipole' (default), 'circular_multipole', or 'elliptical'.
+    fixed_params : dict or None
+        Parameters to freeze during optimization. Keys can be scalar names
+        ('n_sersic', 'R_sersic', 'amplitude', 'q', 'theta_ell', 'x0', 'y0', 'background'),
+        array shorthand ('a_m', 'phi_m'), or per-element ('a_m_0', 'phi_m_1').
+        Values are the fixed values to use.
     """
+    # Validate model_type
+    if model_type not in VALID_MODEL_TYPES:
+        raise ValueError(f"model_type='{model_type}' not in {VALID_MODEL_TYPES}")
     
     # If explicit data is passed (cropped), use it.
     if sci is not None:
@@ -648,7 +823,7 @@ def process_one_target_optimize(
         X_ss, Y_ss = X, Y
 
     q = row_sep['q']
-    if q<=0. or q>=1.:
+    if q<=0. or q>1.:
         raise ValueError("q must be between 0 and 1.")
     theta_ell = row_sep['theta']
 
@@ -789,19 +964,48 @@ def process_one_target_optimize(
         poisson_threshold_n=3., mask=mask, verbose=False
     ))
 
+    # ── Setup fixed_params for optimization ──
+    v0_full = pack_params(p0_elliptical_multipole.copy(), k)
+    free_mask, fixed_values = _fixed_params_to_mask(fixed_params, k)
+    if free_mask is not None:
+        # Inject the user-supplied fixed values into fixed_values array
+        fixed_values = v0_full.copy()  # start from initial guess
+        for key, val in fixed_params.items():
+            param_names = _get_param_names(k)
+            if key in ('a_m', 'phi_m'):
+                for i in range(k):
+                    idx_name = f'{key}_{i}'
+                    idx = param_names.index(idx_name)
+                    free_mask[idx] = False
+                    if np.isscalar(val):
+                        fixed_values[idx] = val
+                    else:
+                        fixed_values[idx] = np.asarray(val)[i]
+            elif key in param_names:
+                idx = param_names.index(key)
+                free_mask[idx] = False
+                fixed_values[idx] = val
+        n_free = int(free_mask.sum())
+        if verbose:
+            free_names = [n for n, f in zip(param_names, free_mask) if f]
+            fixed_names = [n for n, f in zip(param_names, free_mask) if not f]
+            print(f"  Fixed params: {fixed_names}")
+            print(f"  Free params ({n_free}): {free_names}")
+    else:
+        n_free = len(v0_full)
+
     # Define Loss and Residual using SS
     def loss(vec):
-        pp = unpack_params(vec, k)
+        # If fixed_params is active, vec is the short (free-only) vector
+        if free_mask is not None:
+            full_vec = _unpack_free(vec, free_mask, fixed_values)
+        else:
+            full_vec = vec
+        pp = unpack_params(full_vec, k)
         # Stability
         if pp['R_sersic'] <= 0 or pp['n_sersic'] <= 0 or pp['q'] <= 0: return np.inf
         
-        mod_ss = simulate_model_elliptical_multipole(
-            X_ss, Y_ss,
-            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
-            q=pp['q'], theta_ell=pp['theta_ell'], m=m, a_m=pp['a_m'], phi_m=pp['phi_m'],
-            x0=pp['x0'], y0=pp['y0'], background=0.0,
-            psf=None
-        )
+        mod_ss = _build_model_image(model_type, X_ss, Y_ss, pp, m, psf=None)
         if supersample_factor > 1:
             mod = downsample(mod_ss, supersample_factor)
         else:
@@ -812,8 +1016,9 @@ def process_one_target_optimize(
         return res
 
     # Try to swap in JAX JIT loss (3-49× faster)
+    # NOTE: JAX JIT loss only supports elliptical_multipole with no fixed_params
     loss_numpy = loss  # keep reference for residual_vector consistency
-    if use_jax and HAS_JAX:
+    if use_jax and HAS_JAX and model_type == 'elliptical_multipole' and fixed_params is None:
         try:
             jax_loss = _build_jax_loss(
                 X_ss, Y_ss, sci_bgsub, wht,
@@ -833,17 +1038,17 @@ def process_one_target_optimize(
     elif use_jax and not HAS_JAX:
         if verbose:
             print("  JAX not available, using numpy loss")
+    elif use_jax and (model_type != 'elliptical_multipole' or fixed_params is not None):
+        if verbose:
+            print(f"  JAX JIT loss not available for model_type='{model_type}' or with fixed_params, using numpy")
 
     def residual_vector(vec):
-        # ... logic as above ...
-        pp = unpack_params(vec, k)
-        mod_ss = simulate_model_elliptical_multipole(
-            X_ss, Y_ss,
-            n_sersic=pp['n_sersic'], R_sersic=pp['R_sersic'], amplitude=pp['amplitude'],
-            q=pp['q'], theta_ell=pp['theta_ell'], m=m, a_m=pp['a_m'], phi_m=pp['phi_m'],
-            x0=pp['x0'], y0=pp['y0'], background=0.0,
-            psf=None
-        )
+        if free_mask is not None:
+            full_vec = _unpack_free(vec, free_mask, fixed_values)
+        else:
+            full_vec = vec
+        pp = unpack_params(full_vec, k)
+        mod_ss = _build_model_image(model_type, X_ss, Y_ss, pp, m, psf=None)
         if supersample_factor > 1:
             mod = downsample(mod_ss, supersample_factor)
         else:
@@ -879,6 +1084,14 @@ def process_one_target_optimize(
     best_strategy_name = None
     
     # Define bounds once (lo, hi are already defined)
+    # Narrow bounds to free-only if fixed_params is active
+    if free_mask is not None:
+        lo_opt = lo[free_mask]
+        hi_opt = hi[free_mask]
+    else:
+        lo_opt = lo
+        hi_opt = hi
+
     idx_phi_start = 5 + k
     phi_lo = lo[idx_phi_start : idx_phi_start+k]
     phi_hi = hi[idx_phi_start : idx_phi_start+k]
@@ -897,7 +1110,11 @@ def process_one_target_optimize(
     loss_pso = np.inf
     time_pso = np.nan
 
-    v_start = pack_params(p0_elliptical_multipole.copy(),k)
+    v_start_full = pack_params(p0_elliptical_multipole.copy(), k)
+    if free_mask is not None:
+        v_start = _pack_free(v_start_full, free_mask)
+    else:
+        v_start = v_start_full
     
     for attempt_idx, current_method in enumerate(strategies):
         if verbose:
@@ -918,9 +1135,9 @@ def process_one_target_optimize(
             print(f"fitting with {current_method}... ", end="", flush=True)
             start_time = time.time()
             if current_method == 'PSO':
-                res = configured_optimizer(loss, v_run, lo, hi, current_method, n_particles_factor=n_particles_factor)
+                res = configured_optimizer(loss, v_run, lo_opt, hi_opt, current_method, n_particles_factor=n_particles_factor)
             else:
-                res = configured_optimizer(loss, v_run, lo, hi, current_method)
+                res = configured_optimizer(loss, v_run, lo_opt, hi_opt, current_method)
             
             elapsed_time = time.time() - start_time
             print(f"done in {elapsed_time:.1f}s")
@@ -956,8 +1173,12 @@ def process_one_target_optimize(
                 break # Break boundary loop
             
             # 2. Check Boundaries if loss not met
-            # Unpack best params from this run
-            p_current = unpack_params(res.x, k)
+            # Unpack best params from this run (reconstruct full vec if fixed_params)
+            if free_mask is not None:
+                full_res_x = _unpack_free(res.x, free_mask, fixed_values)
+            else:
+                full_res_x = res.x
+            p_current = unpack_params(full_res_x, k)
             phi_current = p_current['phi_m']
             a_current = p_current['a_m']
             
@@ -988,7 +1209,11 @@ def process_one_target_optimize(
                     if verbose:
                         print("  Boundary hit detected. Flipping parameters and retrying (Same Strategy).")
                     # Update v_run for the retry
-                    v_run = pack_params(new_p, k)
+                    v_run_full = pack_params(new_p, k)
+                    if free_mask is not None:
+                        v_run = _pack_free(v_run_full, free_mask)
+                    else:
+                        v_run = v_run_full
                     boundary_retry_count += 1
                     continue # Run loop again with new v_run
                 else:
@@ -1005,12 +1230,17 @@ def process_one_target_optimize(
             break # Break strategy loop
 
     # Handle Result (Use best found)
-    v_best = final_v_best
+    # Reconstruct full vector from free-only if fixed_params is active
+    if free_mask is not None and final_v_best is not None:
+        v_best = _unpack_free(final_v_best, free_mask, fixed_values)
+    else:
+        v_best = final_v_best
     res = best_res # Ensure we have the res object correspond to v_best
     rec['loss_final'] = best_loss
     rec['opt_attempts_count'] = final_attempt_count
     rec['opt_best_attempt'] = final_attempt_count - 1 # 0-indexed best attempt
     rec['opt_best_strategy'] = best_strategy_name
+    rec['model_type'] = model_type
     # Global variables for standard logic
     p_best = unpack_params(v_best, k)
     p_best['supersample_factor'] = supersample_factor
@@ -1019,8 +1249,20 @@ def process_one_target_optimize(
     if res_non_pso is not None:
         rec['loss_non_pso'] = loss_non_pso
         rec['opt_time_non_pso'] = time_non_pso
-        v_err_non_pso = jacobian_error_estimate(res_non_pso.x, residual_vector, bounds=(lo, hi), verbose=verbose)
-        p_best_non_pso = unpack_params(res_non_pso.x, k)
+        # Jacobian uses the same free-only vector convention as loss/residual
+        v_err_raw = jacobian_error_estimate(res_non_pso.x, residual_vector, bounds=(lo_opt, hi_opt), verbose=verbose)
+        # Map errors back to full vector if fixed_params
+        if free_mask is not None:
+            v_err_non_pso = np.full(len(free_mask), np.nan)
+            v_err_non_pso[free_mask] = v_err_raw
+        else:
+            v_err_non_pso = v_err_raw
+        # Reconstruct full best vector
+        if free_mask is not None:
+            full_res_x_nonpso = _unpack_free(res_non_pso.x, free_mask, fixed_values)
+        else:
+            full_res_x_nonpso = res_non_pso.x
+        p_best_non_pso = unpack_params(full_res_x_nonpso, k)
         
         # Populate *_best
         for k_ in p_best_non_pso:
@@ -1046,8 +1288,15 @@ def process_one_target_optimize(
     if res_pso is not None:
         rec['loss_pso'] = loss_pso
         rec['opt_time_pso'] = time_pso
-        v_err_pso = jacobian_error_estimate(res_pso.x, residual_vector, bounds=(lo, hi), verbose=verbose)
-        p_best_pso = unpack_params(res_pso.x, k)
+        v_err_pso_raw = jacobian_error_estimate(res_pso.x, residual_vector, bounds=(lo_opt, hi_opt), verbose=verbose)
+        if free_mask is not None:
+            v_err_pso = np.full(len(free_mask), np.nan)
+            v_err_pso[free_mask] = v_err_pso_raw
+            full_res_x_pso = _unpack_free(res_pso.x, free_mask, fixed_values)
+        else:
+            v_err_pso = v_err_pso_raw
+            full_res_x_pso = res_pso.x
+        p_best_pso = unpack_params(full_res_x_pso, k)
         
         # Populate *_pso_best
         for k_ in p_best_pso:
@@ -1073,13 +1322,7 @@ def process_one_target_optimize(
     # Final Plot (Detailed)
     if plot_final_contour:
         # Re-evaluate best model
-        mod_ss = simulate_model_elliptical_multipole(
-            X_ss, Y_ss,
-            n_sersic=p_best['n_sersic'], R_sersic=p_best['R_sersic'], amplitude=p_best['amplitude'],
-            q=p_best['q'], theta_ell=p_best['theta_ell'], m=m, a_m=p_best['a_m'], phi_m=p_best['phi_m'],
-            x0=p_best['x0'], y0=p_best['y0'], background=0.0,
-            psf=None
-        )
+        mod_ss = _build_model_image(model_type, X_ss, Y_ss, p_best, m, psf=None)
         if supersample_factor > 1:
             mod_final = downsample(mod_ss, supersample_factor)
         else:

@@ -48,7 +48,7 @@ def worker(task):
             row_query=row_query, data_dir=target_d, row_sep=row_sep,
             sci=sci_crop, wht=wht_crop, psf=psf_crop, mask=msk_crop, segmap=seg_crop,
             initial_guess=None, plot_name=os.path.join(target_d, f"{base}_fit"),
-            plot_final_contour=False, supersample_factor=3, truth_row=truth_row, target_loss=1.2
+            plot_final_contour=True, supersample_factor=3, truth_row=truth_row, target_loss=1.2
         )
         rec_fit['fit_time'] = time.time() - t0
         rec_fit['id'] = int(base)
